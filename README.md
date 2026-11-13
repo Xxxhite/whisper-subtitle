@@ -173,8 +173,10 @@ python main.py "sample.wav" --model large-v2 --compute-type float16
 日语可以手动选择 Sakura：
 
 ```powershell
-python main.py "sample.mp4" --language ja --translator sakura
+python main.py "sample.mp4" --translator sakura
 ```
+
+选择 Sakura 时，如果没有填写 `--language` 且配置中的语言为 `auto`，会默认按 `ja` 听写。显式的 `--language` 和配置中指定的具体语言优先；使用 `--language auto` 可保留自动识别。其他听写设置相同时，已有的日语听写缓存可继续复用。
 
 使用前需要准备以下本地资源，或在 `config.json` 的 `sakura` 部分指定路径：
 

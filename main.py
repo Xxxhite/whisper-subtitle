@@ -330,14 +330,20 @@ def render_lrc(segments: list[dict], field: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def load_cache(path: Path, file_hash: str, settings: dict, force: bool) -> dict:
+def load_cache(path: Path, file_hash: str, settings: dict, force: bool, *, reuse_japanese_language: bool = False) -> dict:
     if path.exists() and not force:
         try:
             cache = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise AppError("The task cache is damaged. Inspect it or use --force-transcribe to start over.") from exc
-        if isinstance(cache, dict) and cache.get("version") == 1 and cache.get("file_hash") == file_hash and cache.get("recognition_settings") == settings:
-            return cache
+        if isinstance(cache, dict) and cache.get("version") == 1 and cache.get("file_hash") == file_hash:
+            previous = cache.get("recognition_settings")
+            compatible = previous == settings
+            if (reuse_japanese_language and cache.get("language") == "ja" and isinstance(previous, dict)
+                    and previous.get("language") in {"auto", "ja"} and settings.get("language") in {"auto", "ja"}):
+                compatible = {**previous, "language": settings["language"]} == settings
+            if compatible:
+                return cache
     return {
         "version": 1,
         "file_hash": file_hash,
@@ -801,7 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compute-type", help="override inference precision, e.g. float16, float32, int8_float16")
     parser.add_argument("--vad", action=argparse.BooleanOptionalAction, default=None, help="enable or disable pre-recognition voice filtering; default follows --quality")
     parser.add_argument("--vad-threshold", type=float, help="speech probability threshold when VAD is enabled; default 0.5")
-    parser.add_argument("--translator", choices=["auto", "api", "sakura"], help="api (default): translate non-Chinese audio with API; auto uses the same routing; sakura selects local Japanese translation; Chinese is converted locally")
+    parser.add_argument("--translator", choices=["auto", "api", "sakura"], help="api (default): translate non-Chinese audio with API; auto uses the same routing; sakura selects local Japanese translation and defaults automatic source language to ja unless --language is supplied; Chinese is converted locally")
     parser.add_argument("--separate", "-s", action="store_true", help="separate vocals before transcription; reuse cached vocals when available")
     parser.add_argument("--vocals", "-v", action="store_true", help="also export <stem>.vocals.wav; automatically enables separation")
     parser.add_argument("--quiet", "-Q", action="store_true", help="hide recognized and translated sentences; keep progress, results, and errors")
@@ -868,6 +874,9 @@ def run(args: argparse.Namespace) -> Path:
         value = getattr(args, arg)
         if value:
             config[setting] = value
+    implicit_language = args.language is None and config["language"] == "auto"
+    if implicit_language and config["translation"]["backend"] == "sakura":
+        config["language"] = "ja"
     if args.vad is not None:
         config["vad_filter"] = args.vad
     if args.vad_threshold is not None:
@@ -903,7 +912,7 @@ def run(args: argparse.Namespace) -> Path:
                 export_vocals(recognition_source, vocal_path)
         except SeparationError as exc:
             raise AppError(str(exc)) from exc
-    cache = load_cache(cache_path, file_hash, settings, args.force_transcribe)
+    cache = load_cache(cache_path, file_hash, settings, args.force_transcribe, reuse_japanese_language=implicit_language)
     if cache.get("recognition_complete"):
         print(f"Reusing completed transcript: {len(cache['segments'])} entries.", flush=True)
         for segment in cache["segments"]:

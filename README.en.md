@@ -77,12 +77,14 @@ The existing Sakura-Galtransl-7B-v3.7 Q6_K model and llama.cpp runtime have been
 Use Sakura for Japanese audio:
 
 ```powershell
-python main.py "D:\audio\japanese.wav" --language ja --translator sakura
+python main.py "D:\audio\japanese.wav" --translator sakura
 ```
 
 The program starts its own hidden llama.cpp server on a temporary loopback port, translates locally without an API key, and stops that process when finished or interrupted. Switching translators reuses the transcript and refreshes the Chinese translation. Default and automatic selection use the API for Japanese, English, and Korean; Chinese is always converted locally, including when an explicit translator is selected.
 
 `translation.backend` defaults to `api` in `config.json`. Japanese, English, and Korean use the API, including when the language is detected automatically. `--translator auto` follows the same routing for compatibility with existing configurations. Explicit `--translator sakura` selects local Japanese translation; English and Korean require `auto` or `api`. Choosing `auto` or `api` shares the same translation cache. Switching a previous Sakura task to the default API reuses the transcript and refreshes its translation. Chinese conversion does not use API keys or start Sakura.
+
+When Sakura is selected, an automatic source language defaults to `ja` if `--language` is omitted. Explicit language arguments and specific configured languages take precedence; use `--language auto` to keep language detection. Existing Japanese transcripts are reused when other recognition settings match.
 
 The `sakura` configuration section contains:
 
