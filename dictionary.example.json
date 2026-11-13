@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "pre": [
+    {"id": "sample-spelling", "enabled": false, "language": "en", "source": "Nvoa", "target": "Nova", "match": "contains"}
+  ],
+  "glossary": [
+    {"id": "sample-name", "enabled": false, "language": "en", "source": "Nova", "target": "Nova", "note": "Character name", "match": "contains"}
+  ],
+  "post": [
+    {"id": "sample-correction", "enabled": false, "language": "en", "when": {"source_contains": "Nova"}, "source": "NOVA", "target": "Nova", "match": "contains"}
+  ]
+}

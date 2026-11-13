@@ -1,0 +1,26 @@
+{
+  "sources": [
+    {
+      "kind": "guidelines",
+      "path": "D:\\application\\VoiceTransl\\_internal\\translation_guidelines\\Basic.md",
+      "sha256": "3d2daf99f4055329d7adc5a8c51529d22395d0b86e67681c3ad2dfaae42caad6"
+    },
+    {
+      "kind": "guidelines",
+      "path": "D:\\application\\VoiceTransl\\_internal\\translation_guidelines\\\u65e5\u8bd1\u4e2d_\u589e\u5f3a.md",
+      "sha256": "3de1446718f68ff00fd514c4a92a8eb4d30d18e368742026c730afb3c286378c"
+    },
+    {
+      "kind": "guidelines",
+      "path": "D:\\application\\VoiceTransl\\_internal\\translation_guidelines\\\u65e5\u8bd1\u4e2d_\u589e\u5f3av2.md",
+      "sha256": "3c176a0e5b958a2ca96f146b2b628aa1f12b2a5ddc2a54d36d6b57e7ae6d5eed"
+    },
+    {
+      "kind": "embedded_prompt_module",
+      "path": "D:\\application\\VoiceTransl\\_internal\\translate\\translate.exe",
+      "module": "GalTransl.Backend.Prompts",
+      "sha256": "a54afabc5e50666f2d1ec13ac3342bfe01c85c6b8127195cbd1eaa86e8e5d088",
+      "inspection": "read-only archive and static string-constant inspection"
+    }
+  ]
+}

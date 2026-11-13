@@ -1,0 +1,423 @@
+{
+  "version": 1,
+  "pre": [],
+  "glossary": [
+    {
+      "id": "galtransl-001",
+      "language": "ja",
+      "source": "ツッコミ",
+      "target": "吐槽",
+      "match": "contains",
+      "note": "Comedic retort or commentary."
+    },
+    {
+      "id": "galtransl-002",
+      "language": "ja",
+      "source": "赤ちゃん",
+      "target": "宝宝",
+      "match": "contains",
+      "note": "Baby; preserve the speaker's intended form of address."
+    },
+    {
+      "id": "galtransl-003",
+      "language": "ja",
+      "source": "幼馴染",
+      "target": "青梅竹马",
+      "match": "contains",
+      "note": "Childhood friend; preserve the relationship in context."
+    },
+    {
+      "id": "galtransl-004",
+      "language": "ja",
+      "source": "サキュバス",
+      "target": "魅魔",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-005",
+      "language": "ja",
+      "source": "ハイエルフ",
+      "target": "高等精灵",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-006",
+      "language": "ja",
+      "source": "ダークエルフ",
+      "target": "暗精灵",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-007",
+      "language": "ja",
+      "source": "ヴァンパイア",
+      "target": "吸血鬼",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-008",
+      "language": "ja",
+      "source": "先輩",
+      "target": "前辈",
+      "match": "contains",
+      "note": "Senior in school, work, or a social group."
+    },
+    {
+      "id": "galtransl-009",
+      "language": "ja",
+      "source": "ツンデレ",
+      "target": "傲娇",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-010",
+      "language": "ja",
+      "source": "ヤンデレ",
+      "target": "病娇",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-011",
+      "language": "ja",
+      "source": "ヒロイン",
+      "target": "女主角",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-012",
+      "language": "ja",
+      "source": "モブ",
+      "target": "路人角色",
+      "match": "contains",
+      "note": "Unnamed background character, in fictional-character context."
+    },
+    {
+      "id": "galtransl-013",
+      "language": "ja",
+      "source": "ハーレム",
+      "target": "后宫",
+      "match": "contains",
+      "note": "Harem in a character-relationship or genre context."
+    },
+    {
+      "id": "galtransl-014",
+      "language": "ja",
+      "source": "ギャル",
+      "target": "辣妹",
+      "match": "contains",
+      "note": "Gyaru fashion or character style."
+    },
+    {
+      "id": "galtransl-015",
+      "language": "ja",
+      "source": "ゴスロリ",
+      "target": "哥特萝莉",
+      "match": "contains",
+      "note": "Gothic Lolita fashion."
+    },
+    {
+      "id": "galtransl-016",
+      "language": "ja",
+      "source": "メイド",
+      "target": "女仆",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-017",
+      "language": "ja",
+      "source": "エルフ",
+      "target": "精灵",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-018",
+      "language": "ja",
+      "source": "ドワーフ",
+      "target": "矮人",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-019",
+      "language": "ja",
+      "source": "ゴブリン",
+      "target": "哥布林",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-020",
+      "language": "ja",
+      "source": "オーク",
+      "target": "半兽人",
+      "match": "contains",
+      "note": "Fantasy creature, not oak wood."
+    },
+    {
+      "id": "galtransl-021",
+      "language": "ja",
+      "source": "スライム",
+      "target": "史莱姆",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-022",
+      "language": "ja",
+      "source": "ドラゴン",
+      "target": "巨龙",
+      "match": "contains",
+      "note": "Fantasy dragon; use this wording when the creature context fits."
+    },
+    {
+      "id": "galtransl-023",
+      "language": "ja",
+      "source": "ゴーレム",
+      "target": "魔像",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-024",
+      "language": "ja",
+      "source": "ホムンクルス",
+      "target": "人造人",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-025",
+      "language": "ja",
+      "source": "アンデッド",
+      "target": "不死族",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-026",
+      "language": "ja",
+      "source": "デュラハン",
+      "target": "无头骑士",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-027",
+      "language": "ja",
+      "source": "ギルド",
+      "target": "公会",
+      "match": "contains",
+      "note": "Guild or fictional organization."
+    },
+    {
+      "id": "galtransl-028",
+      "language": "ja",
+      "source": "クエスト",
+      "target": "任务",
+      "match": "contains",
+      "note": "Game or fantasy quest."
+    },
+    {
+      "id": "galtransl-029",
+      "language": "ja",
+      "source": "ダンジョン",
+      "target": "地下城",
+      "match": "contains",
+      "note": "Game or fantasy dungeon."
+    },
+    {
+      "id": "galtransl-030",
+      "language": "ja",
+      "source": "ファンタジー",
+      "target": "奇幻",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-031",
+      "language": "ja",
+      "source": "サイバーパンク",
+      "target": "赛博朋克",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-032",
+      "language": "ja",
+      "source": "ディストピア",
+      "target": "反乌托邦",
+      "match": "contains",
+      "note": "Fictional character, creature, or genre term; use when this sense fits the dialogue."
+    },
+    {
+      "id": "galtransl-asmr-001",
+      "language": "ja",
+      "source": "キンタマ",
+      "target": "蛋蛋",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-002",
+      "language": "ja",
+      "source": "口まんこ",
+      "target": "嘴穴",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-003",
+      "language": "ja",
+      "source": "オチンポ",
+      "target": "肉棒",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-004",
+      "language": "ja",
+      "source": "チンポ",
+      "target": "肉棒",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-005",
+      "language": "ja",
+      "source": "まんこ",
+      "target": "小穴",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-006",
+      "language": "ja",
+      "source": "膣",
+      "target": "阴道",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-007",
+      "language": "ja",
+      "source": "ドＭ",
+      "target": "抖M",
+      "match": "contains",
+      "note": "Colloquial adult/role-play character trait; interpret the speaker's intent from context."
+    },
+    {
+      "id": "galtransl-asmr-008",
+      "language": "ja",
+      "source": "乳首",
+      "target": "乳头",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-009",
+      "language": "ja",
+      "source": "生挿入",
+      "target": "无套插入",
+      "match": "contains",
+      "note": "Adult-context slang or metaphor; preserve the original tone and intended meaning."
+    },
+    {
+      "id": "galtransl-asmr-010",
+      "language": "ja",
+      "source": "生チンポ",
+      "target": "无套肉棒",
+      "match": "contains",
+      "note": "Adult-context slang or metaphor; preserve the original tone and intended meaning."
+    },
+    {
+      "id": "galtransl-asmr-011",
+      "language": "ja",
+      "source": "生オチンポ",
+      "target": "无套肉棒",
+      "match": "contains",
+      "note": "Adult-context slang or metaphor; preserve the original tone and intended meaning."
+    },
+    {
+      "id": "galtransl-asmr-012",
+      "language": "ja",
+      "source": "ディルド",
+      "target": "假阳具",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-013",
+      "language": "ja",
+      "source": "ハリガタ",
+      "target": "假阳具",
+      "match": "contains",
+      "note": "Colloquial adult-context term; preserve the original register and use the dialogue context."
+    },
+    {
+      "id": "galtransl-asmr-014",
+      "language": "ja",
+      "source": "バイブ",
+      "target": "振动棒",
+      "match": "contains",
+      "note": "Adult-context device or metaphor; use this sense only when supported by the dialogue."
+    },
+    {
+      "id": "galtransl-asmr-015",
+      "language": "ja",
+      "source": "生ディルド",
+      "target": "人肉假阳具",
+      "match": "contains",
+      "note": "Adult-context slang or metaphor; preserve the original tone and intended meaning."
+    },
+    {
+      "id": "galtransl-asmr-016",
+      "language": "ja",
+      "source": "生バイブ",
+      "target": "人肉振动棒",
+      "match": "contains",
+      "note": "Adult-context device or metaphor; use this sense only when supported by the dialogue."
+    },
+    {
+      "id": "galtransl-asmr-017",
+      "language": "ja",
+      "source": "生オナホ",
+      "target": "人肉飞机杯",
+      "match": "contains",
+      "note": "Adult-context slang or metaphor; preserve the original tone and intended meaning."
+    },
+    {
+      "id": "galtransl-asmr-alias-001",
+      "language": "ja",
+      "source": "ドM",
+      "target": "抖M",
+      "match": "contains",
+      "note": "Spelling variant of ドＭ. Adult-context term; preserve the source register."
+    },
+    {
+      "id": "galtransl-asmr-alias-002",
+      "language": "ja",
+      "source": "ちんぽ",
+      "target": "肉棒",
+      "match": "contains",
+      "note": "Spelling variant of チンポ. Adult-context term; preserve the source register."
+    },
+    {
+      "id": "galtransl-asmr-alias-003",
+      "language": "ja",
+      "source": "おちんぽ",
+      "target": "肉棒",
+      "match": "contains",
+      "note": "Spelling variant of オチンポ. Adult-context term; preserve the source register."
+    }
+  ],
+  "post": []
+}

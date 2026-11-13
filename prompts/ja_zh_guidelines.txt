@@ -1,0 +1,77 @@
+Japanese-to-Chinese subtitle guidelines
+
+Priority and scope
+- Preserve meaning, plot facts, logical relations, and the speaker's intent first;
+  then preserve voice, emotional intensity, viewpoint, and natural Chinese rhythm.
+- Translate meaning rather than copying Japanese word order or grammatical form.
+  Write fluent, readable Simplified Chinese suitable for spoken subtitles.
+- Adapt the register to the actual material. Light-novel, visual-novel, anime,
+  and character dialogue should sound lively and natural to Chinese ACG readers.
+  Keep factual, formal, historical, or technical speech in its appropriate register.
+- Subtitle IDs, content boundaries, and the required JSON response take priority
+  over stylistic restructuring. Rewrite clauses only within the same subtitle ID.
+
+Context, perspective, and completeness
+- Read the adjacent source text and available previous translations before choosing
+  pronouns, implied subjects, tense, references, and causal or contrastive relations.
+- Distinguish dialogue, narration, internal monologue, explanation, and a character's
+  retort when the text supports the distinction. Missing speaker labels alone do
+  not establish that a line is narration.
+- Preserve the established narrative perspective. Supply omitted subjects or
+  objects only when the context makes them clear; otherwise retain natural omission.
+- Keep the correct subject and object in passive and causative constructions.
+  Do not invent a speaker, gender, relationship, motive, event, or explanatory detail.
+- Preserve relevant information, negation, uncertainty, quantities, names, and
+  emotional force. Do not soften or exaggerate insults or sensitive wording.
+
+Natural Chinese narration and syntax
+- Prefer direct verbs and concrete actions to weak verbs plus abstract nouns.
+  Avoid bureaucratic phrasing, unnecessarily formal prepositions, nominalization,
+  redundant connectives, stacked modifiers, excessive particles, and empty plurals.
+- Break up long modifier chains and bring the main action or judgment forward.
+  Reorder clauses into natural Chinese sequence while preserving the original logic.
+- Use active or other idiomatic Chinese constructions when they express the same
+  meaning more naturally than a mechanically copied Japanese passive.
+- Split a long sentence into shorter clauses, or combine fragments, only inside
+  its existing subtitle entry. Never merge entries, move meaning between IDs,
+  or change subtitle counts, timestamps, or the ownership of any sentence.
+
+Character dialogue and rhythm
+- Make dialogue sound speakable. Preserve the character's demonstrated age,
+  personality, social distance, politeness, confidence, and emotional restraint.
+- Distinguish voices through vocabulary, sentence length, directness, rhythm, and
+  intensity. Do not impose an archetype, cute voice, slang, or catchphrase merely
+  from a character's gender or assumed role.
+- Preserve the timing of retorts, embarrassment, hesitation, surprise, interruptions,
+  and unfinished speech. Keep tense action concise and give reflective lines room
+  to breathe without padding them with invented narration.
+- Render Japanese sentence-ending particles through natural Chinese tone rather
+  than mechanically attaching a Chinese particle to every sentence.
+- Use compact, idiomatic equivalents for onomatopoeia, breaths, and interjections.
+  Retain their emotional meaning and intensity without expanding them into invented
+  events. Standalone sokuon marks should not survive as untranslated kana; preserve
+  the meaning of complete words that contain them.
+- Use ellipses, dashes, repetition, and punctuation to support the intended delivery,
+  not to reproduce every source symbol mechanically.
+
+Culture, terminology, and inline data
+- Preserve Japanese cultural context, school relationships, titles, honorifics,
+  customs, food, and setting-specific vocabulary when they carry meaning.
+- Follow the user's explicit terminology and name conventions. Use consistent
+  translations for the same person, place, title, skill, institution, and item,
+  checking relevant previous translations for continuity.
+- Keep conventional ACG terms where appropriate, while making the Chinese syntax
+  natural. Do not replace the setting with unrelated Chinese cultural references.
+- Avoid fashionable internet memes, anachronistic slang, and personal embellishment.
+  Use colloquial language only to match the original character and scene.
+- Preserve meaningful inline placeholders, escape sequences, tags, and control
+  symbols if present. Serialize them correctly inside JSON strings.
+
+Silent final review
+- Check each translation against its own source entry for omissions, additions,
+  wrong pronouns, logical errors, unnatural wording, and inconsistent names.
+- Read the translated dialogue for fluency and a distinct, context-appropriate voice.
+  Remove translationese while retaining character intent, pace, and factual content.
+- Return only the final translations in the existing JSON contract. Include every
+  requested ID exactly once; omit context-only IDs, analysis, revision summaries,
+  glossary-generation output, TSV, JSONL anchors, Markdown fences, and translator notes.

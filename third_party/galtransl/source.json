@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/GalTransl/GalTransl",
+  "path": "Dict/GPT字典.txt",
+  "source_url": "https://github.com/GalTransl/GalTransl/blob/main/Dict/GPT%E5%AD%97%E5%85%B8.txt",
+  "git_blob_sha": "fa4d686190f7d43269960b96c01eb56dfcdb61dc",
+  "imported_on": "2026-11-14",
+  "license": "GPL-3.0",
+  "upstream_license_url": "https://github.com/GalTransl/GalTransl/blob/main/LICENSE",
+  "upstream_license_blob_sha": "3877ae0a7ff6f94ac222fd704e112723db776114",
+  "upstream_entry_count": 54,
+  "enabled_entry_count": 52,
+  "imported_upstream_entry_count": 49,
+  "alias_entry_count": 3,
+  "related_application_config_url": "https://github.com/shinnpuru/VoiceTransl/blob/main/GalTransl/DefaultProjectConfig.py",
+  "related_application_config_blob_sha": "1641c4d3613f7a41797854910b451385ffb7633b",
+  "changes": "Converted 32 general and 17 adult-context Japanese-to-Chinese pairs into dictionary.json glossary hints with English context notes and Japanese-only matching. Kept upstream targets unchanged; added three kana/width spelling variants with the corresponding upstream targets. Five ambiguous/style-specific general entries remain excluded. VoiceTransl main references these GalTransl dictionary names but does not bundle a Dict directory. Added no pre/post replacement rules."
+}

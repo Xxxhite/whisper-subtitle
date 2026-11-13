@@ -1,0 +1,49 @@
+{
+  "whisper_model": "auto",
+  "language": "auto",
+  "device": "auto",
+  "compute_type": "auto",
+  "download_root": "models",
+  "output_dir": "source",
+  "translation": {
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-flash",
+    "api_key": "",
+    "api_key_env": "SUBTITLE_API_KEY",
+    "batch_size": 20,
+    "context_lines": 3,
+    "timeout_seconds": 120,
+    "max_retries": 3,
+    "instructions": "",
+    "backend": "api"
+  },
+  "sakura": {
+    "server_path": "runtime/llama/llama-server.exe",
+    "model_path": "models/Sakura-Galtransl-7B-v3.7.gguf",
+    "gpu_layers": 24,
+    "device": "Vulkan0",
+    "context_size": 4096,
+    "batch_size": 8,
+    "startup_timeout_seconds": 180,
+    "timeout_seconds": 180,
+    "glossary": ""
+  },
+  "quality": "high",
+  "vad_filter": null,
+  "vad_threshold": 0.5,
+  "quiet": false,
+  "separation": {
+    "enabled": false,
+    "export_vocals": false,
+    "executable_path": "runtime/separate/separate.exe",
+    "model_path": "models/UVR_MDXNET_KARA_2.onnx",
+    "denoise": false,
+    "chunks": 15,
+    "margin": 44100
+  },
+  "merge_repeated_sounds": true,
+  "review_audio": true,
+  "minimum_subtitle_seconds": 0.8,
+  "dictionary_file": "dictionary.json",
+  "format_cleanup": true
+}
