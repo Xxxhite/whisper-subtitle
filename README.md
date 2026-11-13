@@ -331,6 +331,16 @@ D:\audio\sample.zh.lrc
 
 导出的字幕可以自行编辑。重新翻译读取的是 `task.json` 中的听写，导出文件的手动修改不会回写到任务缓存。
 
+## 许可证
+
+本项目的代码和原创文档采用 [GNU General Public License v3.0](LICENSE)（`GPL-3.0-only`）。使用、修改和分发时，请遵守许可证中的相应条件。
+
+第三方资源保留各自的版权和许可：
+
+- GalTransl 字典的来源、修改记录和 GPL-3.0 许可保存在 [third_party/galtransl](third_party/galtransl/README.md)。
+- 日译中翻译规范的参考来源记录在 [prompts/README.md](prompts/README.md)。
+- Python 依赖、可选运行库和模型遵循各自的许可证。模型和运行库不随本仓库提供；Sakura 模型的具体条件见[模型页面](https://huggingface.co/SakuraLLM/Sakura-GalTransl-7B-v3.7)，本地运行库来源见 [runtime/README.md](runtime/README.md)。
+
 ## 参考项目
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper)

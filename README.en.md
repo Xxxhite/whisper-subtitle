@@ -329,6 +329,16 @@ Changing the API endpoint, translation model, translation instructions, or built
 
 Review names, overlapping speech, and passages with strong background music. Exported subtitles can be edited as final deliverables. Retranslation reads the transcript in `task.json`; edits to exported LRC/SRT files are not imported into the cache.
 
+## License
+
+The project's code and original documentation are licensed under the [GNU General Public License v3.0](LICENSE) (`GPL-3.0-only`). Use, modification, and distribution are subject to its terms.
+
+Third-party resources retain their respective copyrights and licenses:
+
+- GalTransl dictionary sources, adaptation records, and the GPL-3.0 license are preserved in [third_party/galtransl](third_party/galtransl/README.md).
+- References used for the Japanese translation guidelines are recorded in [prompts/README.md](prompts/README.md).
+- Python dependencies, optional runtimes, and models follow their own licenses. Model and runtime binaries are not included in this repository. See the [Sakura model card](https://huggingface.co/SakuraLLM/Sakura-GalTransl-7B-v3.7) for its terms and [runtime/README.md](runtime/README.md) for local runtime provenance.
+
 ## References
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
