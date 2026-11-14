@@ -458,7 +458,9 @@ def transcribe(source: Path, config: dict) -> tuple[list[dict], str]:
             start, end = float(item.start), float(item.end)
             if not math.isfinite(start) or not math.isfinite(end) or end <= start:
                 continue
-            segments.append({"id": len(segments) + 1, "start": max(0.0, start), "end": end, "text": text})
+            from transcript_refinement import recognition_fields
+            segments.append({"id": len(segments) + 1, "start": max(0.0, start), "end": end, "text": text,
+                             **recognition_fields(item)})
             print_sentence(segments[-1], "text", config.get("quiet", False))
             if config.get("quiet") and time.monotonic() - last_report >= 5:
                 print(f"Transcription progress: {timestamp(end)}; {len(segments)} entries", flush=True)
@@ -937,14 +939,17 @@ def run(args: argparse.Namespace) -> Path:
         save_json(cache_path, cache)
     formats = ["lrc", "srt"] if args.format == "all" else [args.format]
     if args.transcribe_only or args.original:
-        original_segments = [{**row, **row.get("original_asr", {})} for row in cache["segments"]]
-        export_subtitles(original_segments, destination, source.stem, "text", formats)
+        from transcript_refinement import original_segments
+        export_subtitles(original_segments(cache), destination, source.stem, "text", formats)
     if not args.transcribe_only:
         for pass_number in range(2):
             if config["review_audio"]:
-                from audio_review import review_task
+                from audio_review import review_gaps, review_task
+                from transcript_refinement import refine
                 try:
+                    review_gaps(recognition_source, cache, cache_path, config)
                     review_task(recognition_source, cache, cache_path, config)
+                    refine(recognition_source, cache, cache_path, config)
                 except (OSError, RuntimeError, ValueError) as exc:
                     raise AppError(f"Audio review failed: {exc}. Completed results were saved.") from exc
             try:

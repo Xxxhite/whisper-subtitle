@@ -28,6 +28,23 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             continue
         if review.get("status") == "unresolved":
             add(row, "unresolved_audio", "Local audio review did not recover reliable replacement text.")
+        if review.get("status") == "context_unresolved":
+            add(row, "audio_context_uncertain", "A possible homophone/action mismatch remains after local audio review; check the surrounding dialogue.")
+        if row.get("gap_review"):
+            add(row, "gap_speech_recovered", "Speech was recovered from an untranscribed gap; verify the new wording.", "info")
+            if row["gap_review"].get("avg_logprob", 0) < -.5:
+                add(row, "low_confidence_recovery", "Recovered wording has low recognition confidence; review homophones and context.")
+        from transcript_refinement import low_confidence
+        refinement = row.get('refinement', {})
+        if low_confidence(row):
+            add(row, 'low_confidence_asr', 'Recognition scores suggest uncertain wording; review this audio region.')
+        if refinement.get('status') == 'uncertain':
+            add(row, 'uncertain_refinement', 'Local re-listening did not provide a reliable replacement; existing wording was retained.')
+        if refinement.get('status') == 'revised':
+            add(row, 'revised_asr', f"Local re-listening changed the source; parent ID: {refinement['parent_id']}; similarity: {refinement.get('similarity', 'unknown')}.",
+                'warning' if refinement.get('similarity', 1) < .85 else 'info')
+        if refinement.get('parts', 1) > 1:
+            add(row, 'split_subtitle', f"Split using word timing; parent ID: {refinement['parent_id']}; part {refinement['part']}/{refinement['parts']}.", 'info')
         target = row.get("zh", "")
         if not target:
             add(row, "missing_translation", "No completed Chinese translation.")
@@ -67,6 +84,9 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
     for previous, row in zip(exported, exported[1:]):
         if previous["end"] > row["start"]:
             add(row, "overlapping_timing", "Export overlaps the preceding subtitle.")
+    for row in exported:
+        if row['end'] - row['start'] > 15:
+            add(row, 'long_subtitle', 'Subtitle lasts more than 15 seconds; reliable word boundaries may be unavailable.')
     return result
 
 

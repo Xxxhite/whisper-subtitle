@@ -23,6 +23,10 @@ Context, perspective, and completeness
   Do not invent a speaker, gender, relationship, motive, event, or explanatory detail.
 - Preserve relevant information, negation, uncertainty, quantities, names, and
   emotional force. Do not soften or exaggerate insults or sensitive wording.
+- Check whether concealment succeeds or a secret is already obvious; preserve
+  the direction of that judgment rather than reversing it. Interpret omitted
+  actions through established source context. Resolve plausible ASR homophones
+  only when context supports the reading; do not invent a new action or command.
 
 Natural Chinese narration and syntax
 - Prefer direct verbs and concrete actions to weak verbs plus abstract nouns.
