@@ -233,7 +233,7 @@ python main.py "sample.mp4" -v --output-dir "D:\subtitles" --format srt
 
 ## 字典与候选术语
 
-项目默认读取 `dictionary.json`，包含 52 条日中术语提示：32 条通用词、17 条相关成人题材词和 3 个书写变体。词条用于原文匹配后提供给 API/Sakura；译前和译后强制替换规则默认留空。来源快照和许可证保存在 [third_party/galtransl](third_party/galtransl/README.md)。
+项目默认读取 `dictionary.json`，包含 76 条日中术语提示：52 条 GalTransl 词条及书写变体，加上 24 条来自字幕审校的词条及变体。词条用于原文匹配后提供给 API/Sakura；译前和译后强制替换规则默认留空。来源快照和许可证保存在 [third_party/galtransl](third_party/galtransl/README.md)。
 
 字典支持三个阶段：`pre` 译前修正、`glossary` 术语提示、`post` 带原文条件的译后修正。术语优先匹配长词；短词在句中另有独立出现时，仍会匹配。译前、译后规则按文件顺序执行。
 

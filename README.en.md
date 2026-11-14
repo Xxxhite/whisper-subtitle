@@ -108,7 +108,7 @@ These additional resources occupy about 5.91 GiB. Sakura-GalTransl is distribute
 
 ## 3. Usage
 
-Editable pre-translation, glossary, and source-conditioned post-translation rules are stored in `dictionary.json`. It includes 52 Japanese-only glossary hints adapted from GalTransl: 32 general terms, 17 adult-context terms for relevant ASMR material, and three spelling variants. Pre/post rules start empty. Matching terms are supplied to Sakura or API translation. The [source snapshot and license](third_party/galtransl/README.md) are included. Dictionary changes refresh only affected translations; post-rule changes reuse saved model text. Use `--dict "custom.json"` to choose another file and `--report` to also export a quality-review CSV. See [DICTIONARY.md](docs/DICTIONARY.md) for the schema, examples, caching, formatting, and report fields.
+Editable pre-translation, glossary, and source-conditioned post-translation rules are stored in `dictionary.json`. It includes 76 Japanese-only glossary hints: 52 GalTransl-derived terms and spelling variants, plus 24 terms and variants curated from subtitle review. Pre/post rules start empty. Matching terms are supplied to Sakura or API translation. The [source snapshot and license](third_party/galtransl/README.md) are included. Dictionary changes refresh only affected translations; post-rule changes reuse saved model text. Use `--dict "custom.json"` to choose another file and `--report` to also export a quality-review CSV. See [DICTIONARY.md](docs/DICTIONARY.md) for the schema, examples, caching, formatting, and report fields.
 
 Glossary matching gives longer terms priority while retaining shorter terms that occur independently in the same sentence. Pre/post replacements keep their configured order.
 

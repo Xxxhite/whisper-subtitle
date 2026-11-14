@@ -417,6 +417,198 @@
       "target": "肉棒",
       "match": "contains",
       "note": "Spelling variant of オチンポ. Adult-context term; preserve the source register."
+    },
+    {
+      "id": "review-ja-001",
+      "language": "ja",
+      "source": "オーツミルク",
+      "target": "燕麦奶",
+      "match": "contains",
+      "note": "Oat milk, in beverage and dairy-alternative contexts."
+    },
+    {
+      "id": "review-ja-002",
+      "language": "ja",
+      "source": "アールグレイフラペ",
+      "target": "伯爵茶星冰乐",
+      "match": "contains",
+      "note": "Starbucks Earl Grey Frappuccino; preserve the tea and blended-drink meaning."
+    },
+    {
+      "id": "review-ja-003",
+      "language": "ja",
+      "source": "アールグレイ",
+      "target": "伯爵茶",
+      "match": "contains",
+      "note": "Earl Grey tea; not a person's name in tea/beverage contexts."
+    },
+    {
+      "id": "review-ja-004",
+      "language": "ja",
+      "source": "ジョイフルメドレーティーラテ",
+      "target": "Joyful Medley 茶拿铁",
+      "match": "contains",
+      "note": "Starbucks seasonal tea latte; retain the product name rather than substituting Royal Milk Tea."
+    },
+    {
+      "id": "review-ja-005",
+      "language": "ja",
+      "source": "ジョウフルメドレーティーラテ",
+      "target": "Joyful Medley 茶拿铁",
+      "match": "contains",
+      "note": "ASR spelling variant of ジョイフルメドレーティーラテ in a Starbucks beverage discussion."
+    },
+    {
+      "id": "review-ja-006",
+      "language": "ja",
+      "source": "ゆたんぽ",
+      "target": "热水袋",
+      "match": "contains",
+      "note": "Kana spelling of 湯たんぽ, a hot-water bottle used for warmth."
+    },
+    {
+      "id": "review-ja-007",
+      "language": "ja",
+      "source": "湯たんぽ",
+      "target": "热水袋",
+      "match": "contains",
+      "note": "Hot-water bottle used for warmth."
+    },
+    {
+      "id": "review-ja-008",
+      "language": "ja",
+      "source": "リカバリウェア",
+      "target": "恢复服",
+      "match": "contains",
+      "note": "Recovery clothing or recovery wear; not equipment in a game."
+    },
+    {
+      "id": "review-ja-009",
+      "language": "ja",
+      "source": "ギルドマスター",
+      "target": "公会会长",
+      "match": "contains",
+      "note": "Guild master; use the full title rather than translating ギルド separately."
+    },
+    {
+      "id": "review-ja-010",
+      "language": "ja",
+      "source": "バイノーラル",
+      "target": "双耳录音",
+      "match": "contains",
+      "note": "Binaural recording, especially ASMR/audio-work editions."
+    },
+    {
+      "id": "review-ja-011",
+      "language": "ja",
+      "source": "おなさぽ",
+      "target": "自慰辅助",
+      "match": "contains",
+      "note": "Kana shorthand for オナサポ; adult audio/product context."
+    },
+    {
+      "id": "review-ja-012",
+      "language": "ja",
+      "source": "おなほ",
+      "target": "飞机杯",
+      "match": "contains",
+      "note": "Kana spelling of オナホ; adult product context."
+    },
+    {
+      "id": "review-ja-013",
+      "language": "ja",
+      "source": "オナホ",
+      "target": "飞机杯",
+      "match": "contains",
+      "note": "Adult product abbreviation; preserve the source register."
+    },
+    {
+      "id": "review-ja-014",
+      "language": "ja",
+      "source": "ローション",
+      "target": "润滑液",
+      "match": "contains",
+      "note": "In adult-product contexts use lubricant; in skincare contexts use the appropriate lotion meaning."
+    },
+    {
+      "id": "review-ja-015",
+      "language": "ja",
+      "source": "アダルトグッズ",
+      "target": "成人用品",
+      "match": "contains",
+      "note": "Adult products; a product-category term."
+    },
+    {
+      "id": "review-ja-016",
+      "language": "ja",
+      "source": "抱き枕カバー",
+      "target": "抱枕套",
+      "match": "contains",
+      "note": "Body-pillow cover; keep the cover distinct from the pillow."
+    },
+    {
+      "id": "review-ja-017",
+      "language": "ja",
+      "source": "幼なじみ",
+      "target": "青梅竹马",
+      "match": "contains",
+      "note": "Alternative spelling of 幼馴染; childhood friend."
+    },
+    {
+      "id": "review-ja-018",
+      "language": "ja",
+      "source": "ちくび",
+      "target": "乳头",
+      "match": "contains",
+      "note": "Kana spelling of 乳首; anatomy term."
+    },
+    {
+      "id": "review-ja-019",
+      "language": "ja",
+      "source": "おちんちん",
+      "target": "小鸡鸡",
+      "match": "contains",
+      "note": "Childlike/euphemistic anatomy term; retain the source register."
+    },
+    {
+      "id": "review-ja-020",
+      "language": "ja",
+      "source": "ちんちん",
+      "target": "小鸡鸡",
+      "match": "contains",
+      "note": "Childlike/euphemistic anatomy term; retain the source register."
+    },
+    {
+      "id": "review-ja-021",
+      "language": "ja",
+      "source": "すんどめ",
+      "target": "寸止",
+      "match": "contains",
+      "note": "Kana spelling of 寸止め; stopping just short in an adult teasing context, not downloading."
+    },
+    {
+      "id": "review-ja-022",
+      "language": "ja",
+      "source": "寸止め",
+      "target": "寸止",
+      "match": "contains",
+      "note": "Stopping just short; in adult teasing contexts preserve that intended meaning."
+    },
+    {
+      "id": "review-ja-023",
+      "language": "ja",
+      "source": "フェラホール",
+      "target": "口交型飞机杯",
+      "match": "contains",
+      "note": "Adult product category; preserve the product type."
+    },
+    {
+      "id": "review-ja-024",
+      "language": "ja",
+      "source": "貫通型",
+      "target": "通孔式",
+      "match": "contains",
+      "note": "Through-hole/open-ended design, when discussing a physical product."
     }
   ],
   "post": []

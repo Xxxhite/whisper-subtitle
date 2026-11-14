@@ -1,10 +1,10 @@
 # Dictionary and quality reports
 
-The application reads `dictionary.json` from the project directory by default. It includes 52 Japanese-to-Chinese glossary hints adapted from [GalTransl](https://github.com/GalTransl/GalTransl/tree/main/Dict). The `pre` and `post` stages start empty. `dictionary.example.json` demonstrates the schema with disabled fictional entries; copy and edit individual examples, then set `enabled` to `true` to use them.
+The application reads `dictionary.json` from the project directory by default. It includes 76 Japanese-to-Chinese glossary hints: 52 adapted from [GalTransl](https://github.com/GalTransl/GalTransl/tree/main/Dict), plus 24 manually curated subtitle-review terms and spelling variants. The `pre` and `post` stages start empty. `dictionary.example.json` demonstrates the schema with disabled fictional entries; copy and edit individual examples, then set `enabled` to `true` to use them.
 
 ## Included GalTransl terms
 
-The default glossary covers common forms of address, character archetypes, fantasy/game terms, and an adult-context subset requested for ASMR material. It contains 32 general terms, 17 adult-context terms, and three spelling variants. Entries apply only to Japanese input and are sent only when the source text contains the matching term. Both Sakura and the API translator receive these hints. English, Korean, and local Chinese conversion keep their existing behavior.
+The default glossary covers common forms of address, character archetypes, fantasy/game terms, and an adult-context subset requested for ASMR material. The GalTransl subset contains 32 general terms, 17 adult-context terms, and three spelling variants. Entries apply only to Japanese input and are sent only when the source text contains the matching term. Both Sakura and the API translator receive these hints. English, Korean, and local Chinese conversion keep their existing behavior.
 
 The import preserves the selected upstream translations and adds English context notes. Five ambiguous/style-specific general entries remain omitted. The 17 adult-context entries use IDs starting with `galtransl-asmr-`; their three kana/width variants start with `galtransl-asmr-alias-`. Set these entries to `enabled: false` to disable this subset. The complete 54-pair upstream snapshot, source hashes, adaptation notes, and GPL version 3 license are preserved in [third_party/galtransl](../third_party/galtransl/README.md). Upstream game-script pre/post replacement files, including broad single-character slurred-speech corrections, remain disabled.
 
@@ -22,6 +22,12 @@ For a separate empty dictionary, use:
   "post": []
 }
 ```
+
+## Reviewed subtitle terms
+
+Rules with IDs starting with `review-ja-` were curated from local subtitle review. They cover beverage names, household/recovery items, audio-work terminology, and adult-product vocabulary, including kana variants. These are glossary hints with English context notes; no source-text or post-translation replacements were added.
+
+The Joyful Medley tea-latte name was checked against the [Starbucks Japan product page](https://menu.starbucks.co.jp/4524785348004). Its Chinese rendering retains the product name in English. Ambiguous personal names, apparent ASR hallucinations, and whole-sentence errors were left for separate review. Local evidence and a pre-update dictionary backup are kept in ignored `.cache/` directories.
 
 ## Three stages
 
