@@ -7,6 +7,21 @@ import re
 REVIEW_VERSION = 2
 
 
+def lexical_speech(text: str) -> bool:
+    from subtitle_processing import sound_key, contains_emoji
+    if contains_emoji(text) or sound_key(text) is not None:
+        return False
+    compact = "".join(c for c in unicodedata.normalize("NFKC", text) if c.isalnum())
+    vocal = set("あいうえおぁぃぅぇぉんっーはふへほアウオアイエンッハフヘホァィゥェォ")
+    return len(compact) >= 2 and any(c not in vocal for c in compact)
+
+
+def preceding_context(segment: dict, segments: list[dict]) -> str:
+    rows = [row for row in segments if segment["start"] - 180 <= row["end"] <= segment["start"]
+            and lexical_speech(row["text"]) and row.get("audio_review", {}).get("status") != "omitted"]
+    return "\n".join(row["text"] for row in rows[-8:])[-600:]
+
+
 def decode_window(source: Path, start: float, end: float):
     import av
     import numpy as np

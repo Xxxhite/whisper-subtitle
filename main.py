@@ -583,7 +583,7 @@ def generate_terms(source: Path, cache_path: Path, destination: Path, config: di
 
 
 def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter, progress: TranslationProgress) -> None:
-    from sakura import SakuraError, SakuraServer, UntranslatedError, validate_translations
+    from sakura import GenerationLimitError, SakuraError, SakuraServer, UntranslatedError, validate_translations
     from subtitle_processing import eligible_segments
 
     segments = eligible_segments(cache)
@@ -616,7 +616,9 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                     try:
                         source_lines = [source_text(s) for s in pending]
                         glossary = "\n".join(value for value in (config["sakura"]["glossary"].strip(), batch_glossary(pending)) if value)
-                        translated = server.translate(source_lines, history, glossary, attempt=attempt)
+                        from audio_review import preceding_context
+                        source_context = preceding_context(pending[0], segments)
+                        translated = server.translate(source_lines, history, glossary, attempt=attempt, source_context=source_context)
                         validate_translations(source_lines, translated)
                         if len(pending) > 1 and len(translated) != len(pending):
                             progress.message("Sakura line alignment changed; retrying this batch one entry per request.")
@@ -635,6 +637,10 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                         offset += len(batch)
                         break
                     except SakuraError as exc:
+                        if isinstance(exc, GenerationLimitError) and len(pending) > 1:
+                            progress.message("Sakura reached the output limit; retrying this batch one entry per request.")
+                            single_until = offset + len(batch)
+                            break
                         if attempt == config["translation"]["max_retries"]:
                             if isinstance(exc, UntranslatedError):
                                 for index in exc.indices:
@@ -672,17 +678,25 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
     if options["backend"] == "local":
         signature_data = {"backend": "local", "language": "zh", "conversion": "opencc-t2s"}
     if options["backend"] == "sakura":
-        from sakura import LEGACY_SYSTEM_PROMPT, PROMPT_V2_SYSTEM, PROMPT_VERSION, SYSTEM_PROMPT as SAKURA_PROMPT, has_excessive_expansion, has_prompt_echo, is_invalid_translation
+        from sakura import LEGACY_SYSTEM_PROMPT, PROMPT_V2_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_VERSION, SYSTEM_PROMPT as SAKURA_PROMPT, is_invalid_translation
+        from audio_review import preceding_context
         signature_data = {"backend": "sakura", "language": cache["language"], "settings": config["sakura"], "prompt": SAKURA_PROMPT, "prompt_version": PROMPT_VERSION}
         legacy_signature = fingerprint({key: value for key, value in {**signature_data, "prompt": LEGACY_SYSTEM_PROMPT}.items() if key != "prompt_version"})
         accepted = {legacy_signature, fingerprint(signature_data)}
+        accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V3_SYSTEM, "prompt_version": 3}))
+        accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V4_SYSTEM, "prompt_version": 4}))
         for prompt in (PROMPT_V2_SYSTEM, PROMPT_V2_SYSTEM.replace("Translate short utterances as given, without prepending earlier dialogue. ", "")):
             accepted.add(fingerprint({**signature_data, "prompt": prompt, "prompt_version": 2}))
         if not retranslate and cache.get("translation_signature") in accepted:
-            rejected = [segment["id"] for segment in segments if segment.get("zh") and (
-                is_invalid_translation(segment.get("model_zh", segment["zh"]), source_text(segment))
-                or has_prompt_echo(segment["zh"], source_text(segment))
-                or has_excessive_expansion(segment["zh"], source_text(segment)))]
+            rejected = []
+            for index, segment in enumerate(segments):
+                if not segment.get("zh"):
+                    continue
+                history = [s.get("model_zh", s.get("zh", "")) for s in segments[max(0, index - options["context_lines"]):index]]
+                context = preceding_context(segment, segments)
+                if any(is_invalid_translation(text, source_text(segment), history=history, source_context=context)
+                       for text in (segment.get("model_zh", segment["zh"]), segment["zh"])):
+                    rejected.append(segment["id"])
             if rejected or cache.get("translation_signature") != fingerprint(signature_data):
                 # Save an exact copy before repairing a completed or partial legacy cache.
                 backup = cache_path.with_name(f"task.before-sakura-prompt-v{PROMPT_VERSION}.json")

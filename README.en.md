@@ -102,9 +102,19 @@ The `sakura` configuration section contains:
 
 Sakura uses a dedicated translation prompt with plain text lines, rather than the API backend's JSON instructions. If a batch changes the number of lines, the program retries that batch one subtitle per request to preserve timestamps, then resumes normal batches. Completed translations are cached after every successful request. Runtime logs are written to `.cache/sakura-server-<process-id>.log`.
 
-Sakura uses a short Chinese internal task template suited to its fine-tuning; the console and configuration help remain English. Optional glossary and previous translations are supplied as reference material. Single-entry requests omit previous translations and use temperature 0 to reduce continuation of earlier dialogue. Responses containing known instructions, translated system-message instructions, or excessive expansion of short inputs are rejected before saving or printing. Retries omit history and use a lower temperature. Existing caches from earlier Sakura prompts are migrated on the next Sakura run: detected invalid entries are translated again, while the transcript and other completed entries are retained. The original cache is backed up as `task.before-sakura-prompt-v3.json`. Run the same command again to refresh exported files; use `--retranslate` to refresh every translation instead. See the [model's prompt guidance](https://huggingface.co/SakuraLLM/Sakura-GalTransl-7B-v3.7).
+Sakura uses a Chinese internal task template suited to its fine-tuning; the console and configuration help remain English. Japanese source context and batch translation history are bounded, separate reference blocks in the system message. The user message identifies only the current translation input and optional glossary. Single-entry requests omit previous translations and use temperature 0.
+
+Responses containing known instructions, excessive expansion, unexpected long phrase repetitions, or copied historical dialogue are rejected before saving or printing. When a request with references triggers these checks, each entry receives one isolated retry without source context or translation history, retaining its glossary hints. Subsequent caller retries also omit context. Legitimate source repetitions and brief vocalizations remain supported. Persistent failures pause with completed progress saved.
+
+Existing caches from earlier Sakura prompts are migrated on the next Sakura run: detected invalid entries are translated again, while the transcript and other completed entries are retained. The original cache is backed up as `task.before-sakura-prompt-v5.json`. Run the same command again to refresh exported files; use `--retranslate` to refresh every translation instead. See the [model's prompt guidance](https://huggingface.co/SakuraLLM/Sakura-GalTransl-7B-v3.7).
 
 These additional resources occupy about 5.91 GiB. Sakura-GalTransl is distributed under CC BY-NC-SA 4.0 for noncommercial use; see the [model card and license](https://huggingface.co/SakuraLLM/Sakura-GalTransl-7B-v3.7).
+
+### Generation limits
+
+Unambiguous single-vowel sounds such as ah, oh, and humming are converted locally when no glossary hint applies. Repetitions are capped at four characters followed by an ellipsis; source text and timing remain unchanged. Dialogue, mixed syllables, and ambiguous acknowledgments still use the model.
+
+Sakura's output budget follows input length, with mild repetition penalties. A batch that reaches its output limit is retried one entry at a time, then normal batching resumes. Incomplete output is rejected. A single entry that still fails after bounded retries pauses with saved progress. Existing completed translations remain reusable; these changes apply to pending entries.
 
 ## 3. Usage
 

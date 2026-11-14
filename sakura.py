@@ -10,6 +10,7 @@ import socket
 import subprocess
 import time
 import unicodedata
+from difflib import SequenceMatcher
 from urllib import error, request
 
 
@@ -37,14 +38,31 @@ SYSTEM_PROMPT = (
     "\u4fdd\u7559\u539f\u610f\u548c\u6362\u884c\uff0c\u53ea\u8fd4\u56de\u8bd1\u6587\u3002"
 )
 INPUT_PREFIX = "\u5c06\u4e0b\u9762\u7684\u65e5\u6587\u6587\u672c\u7ffb\u8bd1\u6210\u4e2d\u6587\uff1a\n"
-PROMPT_VERSION = 3
+PROMPT_V3_SYSTEM = SYSTEM_PROMPT
+SYSTEM_PROMPT += (
+    "\u8054\u7cfb\u539f\u6587\u4e0a\u4e0b\u6587\u7406\u89e3\u7701\u7565\u7684\u52a8\u4f5c\u3001\u4eba\u79f0\u548c\u53ef\u80fd\u7684\u542c\u5199\u540c\u97f3\u9519\u5b57\uff1b"
+    "\u51c6\u786e\u4fdd\u7559\u80af\u5b9a\u3001\u5426\u5b9a\u3001\u663e\u9732\u4e0e\u9690\u85cf\u7684\u903b\u8f91\u5173\u7cfb\uff0c\u4e0d\u8981\u53cd\u8f6c\u539f\u610f\u3002"
+    "\u4e0a\u4e0b\u6587\u53ea\u4f9b\u53c2\u8003\uff0c\u4e0d\u7ffb\u8bd1\u6216\u590d\u8ff0\uff0c\u4e0d\u8865\u5199\u539f\u6587\u6ca1\u6709\u7684\u6307\u4ee4\u6216\u884c\u4e3a\u3002"
+)
+PROMPT_V4_SYSTEM = SYSTEM_PROMPT
+SYSTEM_PROMPT += (
+    "\u7528\u6237\u6d88\u606f\u4e2d\u6807\u660e\u7684\u5f85\u8bd1\u6587\u672c\u662f\u552f\u4e00\u7ffb\u8bd1\u5bf9\u8c61\u3002"
+    "\u53c2\u8003\u8d44\u6599\u53ea\u5e2e\u52a9\u7406\u89e3\uff0c\u7981\u6b62\u8f93\u51fa\u5176\u4e2d\u7684\u53e5\u5b50\u3002"
+    "\u6bcf\u884c\u5f85\u8bd1\u6587\u672c\u53ea\u8fd4\u56de\u5bf9\u5e94\u7684\u4e00\u884c\u8bd1\u6587\u3002"
+    "\u539f\u6587\u65e0\u6cd5\u786e\u5b9a\u7684\u4e3b\u8bed\u4fdd\u6301\u7701\u7565\uff0c\u4e0d\u8981\u51ed\u7a7a\u6dfb\u52a0\u7b2c\u4e00\u4eba\u79f0\u3002"
+)
+PROMPT_VERSION = 5
+SOURCE_CONTEXT_PREFIX = "\u539f\u6587\u4e0a\u4e0b\u6587\uff08\u4ec5\u4f9b\u53c2\u8003\uff09\uff1a\n"
 _PROMPT_MARKERS = (
     "Glossary (source -> translation # notes; may be empty):",
     "Previous translations:", "Using the glossary and context above,",
     "translate the following Japanese text into Simplified Chinese",
     "Reference translations (context only):", "Glossary entries (context only):",
     "<|im_start|>", "<|im_end|>",
-    SYSTEM_PROMPT, INPUT_PREFIX.strip(),
+    SYSTEM_PROMPT, PROMPT_V4_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V2_SYSTEM, LEGACY_SYSTEM_PROMPT, INPUT_PREFIX.strip(),
+    SOURCE_CONTEXT_PREFIX.strip(),
+    "<reference_source>", "</reference_source>",
+    "<reference_translations>", "</reference_translations>",
     "\u5386\u53f2\u7ffb\u8bd1\uff1a", "\u672f\u8bed\u8868\uff1a",
 )
 _TRANSLATED_INSTRUCTION = re.compile(
@@ -66,6 +84,21 @@ def _compact(text: str) -> str:
     return "".join(char for char in unicodedata.normalize("NFKC", text).casefold() if char.isalnum())
 
 
+def translate_vocalization(text: str) -> str | None:
+    """Handle unambiguous vowel-only sounds without autoregressive generation."""
+    folded = unicodedata.normalize("NFKC", text)
+    folded = "".join(chr(ord(char) - 0x60) if 0x30A1 <= ord(char) <= 0x30F6 else char for char in folded)
+    folded = "".join(char for char in folded if not char.isspace() and not unicodedata.category(char).startswith("P"))
+    folded = folded.translate(str.maketrans({"\u3041": "\u3042", "\u3045": "\u3046", "\u3049": "\u304a"}))
+    core = folded.replace("\u3063", "").replace("\u30fc", "")
+    sounds = {"\u3042": "\u554a", "\u3046": "\u545c", "\u304a": "\u54e6", "\u3093": "\u55ef"}
+    if not core or len(set(core)) != 1 or core[0] not in sounds:
+        return None
+    if any(char not in {core[0], "\u3063", "\u30fc"} for char in folded):
+        return None
+    return sounds[core[0]] * min(len(core), 4) + ("\u2026" if len(core) > 4 else "")
+
+
 def has_prompt_echo(text: str, source: str) -> bool:
     """Recognize application instructions that are absent from the source text."""
     normalized = " ".join(text.split()).casefold().replace("\u2192", "->")
@@ -80,7 +113,8 @@ def has_prompt_echo(text: str, source: str) -> bool:
     return bool(_TRANSLATED_INSTRUCTION.search(text) and not _TRANSLATED_INSTRUCTION.search(source))
 
 
-def validate_translations(lines: list[str], translations: list[str]) -> None:
+def validate_translations(lines: list[str], translations: list[str], *,
+                          history: list[str] = (), source_context: str = "") -> None:
     from subtitle_processing import contains_emoji
     aligned = len(lines) == len(translations)
     unchanged = [index for index, (source, target) in enumerate(zip(lines, translations))
@@ -90,23 +124,56 @@ def validate_translations(lines: list[str], translations: list[str]) -> None:
     if unchanged:
         raise UntranslatedError(unchanged)
     if has_prompt_echo("\n".join(translations), "\n".join(lines)):
-        raise SakuraError("Sakura repeated translation instructions; the response was rejected.")
+        raise ContextLeakError("Sakura repeated translation instructions; the response was rejected.")
     pairs = zip(lines, translations) if len(lines) == len(translations) else [("\n".join(lines), "\n".join(translations))]
     for source, translated in pairs:
         if contains_emoji(translated) and not contains_emoji(source):
             raise SakuraError("Sakura introduced emoji into the translation; the response was rejected.")
         if has_excessive_expansion(translated, source):
-            raise SakuraError("Sakura expanded a short subtitle excessively; the response was rejected.")
+            raise ContextLeakError("Sakura expanded a short subtitle excessively; the response was rejected.")
+        if has_unexpected_repetition(translated, source):
+            raise ContextLeakError("Sakura repeated a long phrase absent from the source; the response was rejected.")
+        if has_history_leak(translated, source, history, source_context):
+            raise ContextLeakError("Sakura included previous dialogue; the response was rejected.")
 
 
 def has_excessive_expansion(text: str, source: str) -> bool:
-    return len(_compact(text)) > max(96, 12 * len(_compact(source)))
+    return len(_compact(text)) > max(64, 3 * len(_compact(source)))
 
 
-def is_invalid_translation(text: str, source: str) -> bool:
-    from subtitle_processing import contains_emoji
-    return (has_prompt_echo(text, source) or has_excessive_expansion(text, source) or is_untranslated_japanese(source, text)
-            or contains_emoji(text) and not contains_emoji(source))
+def _repeated_phrase(text: str, width: int) -> bool:
+    first = {}
+    for index in range(len(text) - width + 1):
+        phrase = text[index:index + width]
+        previous = first.setdefault(phrase, index)
+        if index - previous >= width:
+            return True
+    return False
+
+
+def has_unexpected_repetition(text: str, source: str) -> bool:
+    # Long duplicated phrases are different from brief sound repetitions.
+    return _repeated_phrase(_compact(text), 12) and not _repeated_phrase(_compact(source), 6)
+
+
+def has_history_leak(text: str, source: str, history: list[str], source_context: str) -> bool:
+    current = _compact(source)
+    references = [_compact(line) for line in source_context.splitlines()]
+    # A repeated source utterance may legitimately reuse its earlier translation.
+    if any(min(len(current), len(ref)) >= 6 and
+           SequenceMatcher(None, current, ref, autojunk=False).ratio() >= .65 for ref in references):
+        return False
+    target = _compact(text)
+    return any(len(previous) >= 12 and previous in target and len(target) >= len(previous) + 8
+               for previous in map(_compact, history))
+
+
+def is_invalid_translation(text: str, source: str, *, history: list[str] = (), source_context: str = "") -> bool:
+    try:
+        validate_translations([source], [text], history=history, source_context=source_context)
+    except SakuraError:
+        return True
+    return False
 
 
 def is_untranslated_japanese(source: str, target: str) -> bool:
@@ -116,6 +183,14 @@ def is_untranslated_japanese(source: str, target: str) -> bool:
 
 class SakuraError(RuntimeError):
     """A local model or server error suitable for display."""
+
+
+class GenerationLimitError(SakuraError):
+    """An incomplete generation that must not be accepted as a translation."""
+
+
+class ContextLeakError(SakuraError):
+    """Reference leakage or unexpected continuation suitable for an isolated retry."""
 
 
 class UntranslatedError(SakuraError):
@@ -190,19 +265,50 @@ class SakuraServer:
             self.stop()
             raise
 
-    def translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int = 0) -> list[str]:
+    def translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int = 0, source_context: str = "") -> list[str]:
         if self.process is None or self.process.poll() is not None:
             raise SakuraError("The local Sakura server is not running.")
+        sounds = [translate_vocalization(line) for line in lines]
+        if lines and all(sound is not None for sound in sounds) and not glossary.strip():
+            return sounds
+        active_source = source_context.strip()[-600:] if attempt == 0 else ""
+        active_history = history if attempt == 0 and len(lines) > 1 else []
+        try:
+            return self._translate(lines, active_history, glossary, attempt=attempt, source_context=active_source,
+                                   check_history=history if active_source else active_history)
+        except ContextLeakError:
+            if not (active_source or active_history):
+                raise
+            print("Sakura included reference text or unexpected repetition; retrying each entry without context.", flush=True)
+            # One isolated retry per entry. Persistent failures use the caller's bounded retries.
+            result = []
+            for line in lines:
+                sound = translate_vocalization(line) if not glossary.strip() else None
+                if sound is not None:
+                    result.append(sound)
+                    continue
+                translated = self._translate([line], [], glossary, attempt=max(1, attempt), source_context="")
+                result.append(" ".join(translated))
+            return result
+
+    def _translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int, source_context: str,
+                   check_history: list[str] | None = None) -> list[str]:
+        system = SYSTEM_PROMPT
+        if source_context:
+            system += "\n\n" + SOURCE_CONTEXT_PREFIX + "<reference_source>\n" + source_context + "\n</reference_source>"
+        if history:
+            system += "\n\n<reference_translations>\n" + "\n".join(history)[-600:] + "\n</reference_translations>"
         user = ""
-        if history and attempt == 0 and len(lines) > 1:
-            user += "\u5386\u53f2\u7ffb\u8bd1\uff1a" + "\n".join(history) + "\n\n"
         if glossary.strip():
             user += "\u672f\u8bed\u8868\uff1a\n" + glossary.strip() + "\n\n"
         user += INPUT_PREFIX + "\n".join(lines)
         body = {
             "model": "sakura", "stream": False, "temperature": 0.3 if attempt == 0 and len(lines) > 1 else 0.0, "top_p": 0.8,
-            "max_tokens": min(2048, self.options["context_size"] // 2),
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}],
+            "max_tokens": min(2048, self.options["context_size"] // 2,
+                              max(96, 6 * sum(len(line) for line in lines) + 48 * len(lines))),
+            "repeat_penalty": 1.08 if attempt == 0 else 1.15,
+            "frequency_penalty": 0.05 if attempt == 0 else 0.2,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
         req = request.Request(
             self.base_url + "/v1/chat/completions",
@@ -214,7 +320,7 @@ class SakuraServer:
                 data = json.loads(response.read().decode("utf-8"))
             choice = data["choices"][0]
             if choice.get("finish_reason") == "length":
-                raise SakuraError("Sakura response reached the token limit; reduce sakura.batch_size.")
+                raise GenerationLimitError("Sakura reached the output limit; incomplete translation rejected.")
             text = choice["message"]["content"]
             if not isinstance(text, str) or not text.strip():
                 raise SakuraError("Sakura returned an empty translation.")
@@ -226,7 +332,8 @@ class SakuraServer:
         if text.startswith("```") and text.endswith("```"):
             text = "\n".join(text.splitlines()[1:-1])
         translated = [line.strip() for line in text.splitlines() if line.strip()]
-        validate_translations(lines, translated)
+        validate_translations(lines, translated, history=history if check_history is None else check_history,
+                              source_context=source_context)
         return translated
 
     def stop(self) -> None:
