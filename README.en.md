@@ -231,6 +231,14 @@ Aligned long entries are split before translation using actual word times, pause
 
 Old caches use available scores and duration to select regions. Use `--force-transcribe` to collect word timing and recognition evidence for the complete file. `-q normal` skips refinement; `review_audio: false` disables both review and splitting. `--report` includes low-confidence recognition, revised sources, split lineage, and entries still longer than 15 seconds.
 
+### Cross-checking quiet short speech
+
+Default large-v2 high-quality Japanese tasks additionally review short speech when a local turbo model is available. A 0.35 VAD threshold selects candidates inside gaps of 0.8–12 seconds, excluding speech tails close to existing subtitle boundaries. Existing short lines are selected when scores are missing or relatively low; entries already refined from long regions keep the earlier result.
+
+Both large-v2 and local turbo recognize each candidate. Acceptance checks scores, word probabilities, repetition, and normalized kana agreement. Added dialogue requires confirmation by two distinct models. Breath-only results, isolated humming without a question marker, and model disagreements remain unconfirmed. Existing lines change only when both models agree on similar-sounding wording. Added laughs or breaths alone leave the existing dialogue intact. Kana and elongation normalization are used for comparison; output keeps the recognized spelling.
+
+Progress and both recognition passes are checkpointed in `short_speech`, with a `task.before-short-review.json` backup. Only recovered or revised entries are translated again. `--report` includes recovered, revised, and uncertain short lines. The first run adds two local recognition passes; completed progress is reused. Missing local turbo skips this stage until the model is available; this review does not download models. `-q normal` and `review_audio: false` skip it.
+
 Final Chinese subtitles combine adjacent repetitions of recognized laughter and common sound effects by default. The entries must be consecutive, use the same sound, have gaps of at most one second, and span at most ten seconds in total. The combined entry keeps the first translation and covers the group's full time range. Dialogue, acknowledgments, exclamations, long pauses, and unrecognized sounds remain separate. Raw transcripts, source-language exports, translation caches, and sentence logs retain every entry.
 
 Use `--sounds keep` to disable repeated-sound grouping, or `--sounds merge` to combine repetitions. Emoji filtering and minimum-duration cleanup still apply. The configuration default is `merge_repeated_sounds: true`. Switching this option reuses recognition and translation caches. For example:

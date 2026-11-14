@@ -1,0 +1,201 @@
+"""Conservative two-model confirmation for quiet gaps and short Japanese lines."""
+from __future__ import annotations
+
+from difflib import SequenceMatcher
+from pathlib import Path
+import re
+import unicodedata
+
+VERSION = 1
+
+
+def alternate_available(config: dict) -> bool:
+    import main
+    from faster_whisper.utils import download_model
+    try:
+        download_model('turbo', cache_dir=str(main.resolve_setting(config['download_root'])), local_files_only=True)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def phonetic_key(text: str) -> str:
+    text = unicodedata.normalize('NFKC', text)
+    text = ''.join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in text)
+    # Ignore pronunciation decorations only for agreement checks, never rewrite output.
+    return ''.join(c.casefold() for c in text if c.isalnum() and c not in 'ーぁぃぅぇぉ')
+
+
+def dialogue_key(text: str) -> str:
+    text = unicodedata.normalize('NFKC', text)
+    text = ''.join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in text)
+    # Adding a laugh or breath alone does not justify retranslating correct dialogue.
+    text = re.sub(r'^(?:[んぁあぅうぇえぉおはふへほーっ]+[、,，…。?？\s]+)+', '', text)
+    return phonetic_key(text)
+
+
+def plan_candidates(segments: list[dict], speech: list[dict]) -> list[dict]:
+    from audio_review import lexical_speech
+    from transcript_refinement import compact, low_confidence
+    rows = sorted((r for r in segments if r.get('audio_review', {}).get('status') != 'omitted'), key=lambda r: r['start'])
+    candidates = []
+    for before, after in zip(rows, rows[1:]):
+        start, end = before['end'], after['start']
+        if not .8 <= end - start <= 12 or not (lexical_speech(before['text']) or lexical_speech(after['text'])):
+            continue
+        windows = []
+        for region in speech:
+            left, right = max(start, region['start'] / 16000), min(end, region['end'] / 16000)
+            if not .12 <= right - left <= 2.5 or min(left - start, end - right) < .35:
+                continue
+            window = {'kind': 'gap', 'left': max(start, left - 1.5), 'right': min(end, right + 1.5),
+                      'bounds': [start, end], 'speech': [left, right]}
+            if windows and window['left'] < windows[-1]['right']:
+                windows[-1]['right'] = max(windows[-1]['right'], window['right'])
+                windows[-1]['speech'][1] = max(windows[-1]['speech'][1], right)
+            else:
+                windows.append(window)
+        candidates.extend(windows)
+    for row in rows:
+        if (row.get('refinement') or not lexical_speech(row['text']) or not .3 <= row['end'] - row['start'] <= 4
+                or not 4 <= len(compact(row['text'])) <= 32):
+            continue
+        if 'avg_logprob' in row and not (low_confidence(row) or row['avg_logprob'] < -.65):
+            continue
+        candidates.append({'kind': 'existing', 'id': row['id'], 'source': row['text'],
+                           'left': max(0, row['start'] - 1.2), 'right': row['end'] + 1.2,
+                           'focus': [row['start'], row['end']]})
+    return candidates
+
+
+def hypothesis(items: list[dict], window: dict) -> dict | None:
+    from subtitle_processing import contains_emoji
+    from transcript_refinement import compact
+    from sakura import has_unexpected_repetition
+    words, scores = [], []
+    for row in items:
+        chosen = []
+        for word in row.get('words', []):
+            absolute = {**word, 'start': word['start'] + window['left'], 'end': word['end'] + window['left']}
+            if 'focus' not in window or absolute['end'] > window['focus'][0] - .15 and absolute['start'] < window['focus'][1] + .15:
+                chosen.append(absolute)
+        if chosen:
+            words.extend(chosen)
+            scores.append(row)
+    text = ''.join(w['word'] for w in words).strip()
+    if not text or contains_emoji(text) or has_unexpected_repetition(text, '') or len(compact(text)) > 32:
+        return None
+    avg = sum(r.get('avg_logprob', -2) for r in scores) / len(scores)
+    no_speech = max(r.get('no_speech_prob', 1) for r in scores)
+    probabilities = [w['probability'] for w in words if 'probability' in w and compact(w['word'])]
+    if avg < -1 or no_speech >= .6 or any(r.get('compression_ratio', 0) > 2.4 for r in scores):
+        return None
+    if not probabilities or sum(probabilities) / len(probabilities) < .35:
+        return None
+    return {'text': text, 'words': words, 'avg_logprob': avg, 'no_speech_prob': no_speech,
+            'start': min(w['start'] for w in words), 'end': max(w['end'] for w in words)}
+
+
+def confirmed(primary: dict | None, alternate: dict | None, window: dict) -> bool:
+    from audio_review import lexical_speech
+    if not primary or not alternate or phonetic_key(primary['text']) != phonetic_key(alternate['text']):
+        return False
+    key = phonetic_key(alternate['text'])
+    if not key:
+        return False
+    if window['kind'] == 'existing':
+        return SequenceMatcher(None, phonetic_key(window['source']), key, autojunk=False).ratio() >= .5
+    meaningful = lexical_speech(alternate['text']) or key in {'うん', 'はい', 'ううん', 'あれ', 'へえ'}
+    meaningful |= key == 'ん' and all(any(c in h['text'] for c in '?？') for h in (primary, alternate))
+    if not meaningful:
+        return False
+    left, right = window['speech']
+    return all(min(h['end'], right) - max(h['start'], left) >= .08 for h in (primary, alternate))
+
+
+def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dict) -> list[int]:
+    import main
+    from audio_review import ReviewRecognizer, decode_window
+    from transcript_refinement import VERSION as REFINEMENT_VERSION, _clear_translation
+    if cache.get('language') != 'ja' or config.get('quality', 'high') != 'high' or main.asr_settings(config)['model'] != 'large-v2':
+        return []
+    state = cache.get('short_speech', {})
+    if state.get('version') == VERSION and state.get('complete'):
+        return []
+    if not alternate_available(config):
+        print('Short speech review skipped: a local turbo model is required for independent confirmation.', flush=True)
+        return []
+    if state.get('version') != VERSION:
+        import av
+        from faster_whisper.vad import get_speech_timestamps
+        with av.open(str(source)) as container:
+            duration = container.duration / av.time_base if container.duration else max(r['end'] for r in cache['segments'])
+        speech = get_speech_timestamps(decode_window(source, 0, duration), threshold=.35,
+                                      min_speech_duration_ms=100, min_silence_duration_ms=100, speech_pad_ms=0)
+        state = {'version': VERSION, 'candidates': plan_candidates(cache['segments'], speech),
+                 'passes': {}, 'applied': 0, 'added_ids': [], 'changed_ids': [], 'complete': False}
+        backup = cache_path.with_name('task.before-short-review.json')
+        if not backup.exists():
+            main.save_json(backup, cache)
+        cache['short_speech'] = state
+        main.save_json(cache_path, cache)
+    for label, alternate in [('primary', False), ('alternate', True)]:
+        progress = state['passes'].setdefault(label, {'results': [], 'model': None})
+        recognizer = ReviewRecognizer(config, alternate=alternate)
+        try:
+            for index in range(len(progress['results']), len(state['candidates'])):
+                window = state['candidates'][index]
+                print(f"Checking short speech {index + 1}/{len(state['candidates'])} ({label}; {main.console_time(window['left'])})...", flush=True)
+                items = recognizer.timed(decode_window(source, window['left'], window['right']), 'ja')
+                progress['model'] = recognizer.model_name
+                progress['results'].append(items)
+                main.save_json(cache_path, cache)
+        finally:
+            recognizer.model = None
+    distinct = (state['passes']['primary']['model'] and state['passes']['alternate']['model']
+                and state['passes']['primary']['model'] != state['passes']['alternate']['model'])
+    state['distinct_models'] = bool(distinct)
+    for index in range(state['applied'], len(state['candidates'])):
+        window = state['candidates'][index]
+        a = hypothesis(state['passes']['primary']['results'][index], window)
+        b = hypothesis(state['passes']['alternate']['results'][index], window)
+        accepted = distinct and confirmed(a, b, window)
+        evidence = {'version': VERSION, 'candidate': index, 'status': 'uncertain',
+                    'primary': a['text'] if a else '', 'alternate': b['text'] if b else ''}
+        if window['kind'] == 'gap':
+            if accepted:
+                start = max(window['bounds'][0], b['start'], window['speech'][0] - .35)
+                end = min(window['bounds'][1], max(b['end'], window['speech'][1] + .2))
+                if end > start and not any(min(end, row['end']) - max(start, row['start']) > .05 for row in cache['segments']):
+                    identifier = max([r['id'] for r in cache['segments']] + [int(k) for k in cache.get('refinement', {}).get('originals', {})]) + 1
+                    evidence['status'] = 'recovered'
+                    row = {**b, 'id': identifier, 'start': start, 'end': end, 'short_review': evidence,
+                           'refinement': {'version': REFINEMENT_VERSION, 'parent_id': identifier, 'status': 'unchanged', 'short_confirmed': True}}
+                    row['words'] = [{**w, 'start': max(start, w['start']), 'end': min(end, w['end'])} for w in b['words']
+                                    if w['end'] >= start and w['start'] <= end]
+                    cache['segments'].append(row)
+                    cache['segments'].sort(key=lambda r: (r['start'], r['end'], r['id']))
+                    state['added_ids'].append(identifier)
+        else:
+            row = next((r for r in cache['segments'] if r['id'] == window['id']), None)
+            if row and row['text'] == window['source']:
+                if accepted and dialogue_key(row['text']) != dialogue_key(b['text']):
+                    row.setdefault('original_asr', {k: row[k] for k in ('text', 'start', 'end')})
+                    _clear_translation(row)
+                    row['text'] = b['text']
+                    for key in ('words', 'avg_logprob', 'no_speech_prob', 'compression_ratio'):
+                        row.pop(key, None)
+                    row['avg_logprob'] = b['avg_logprob']
+                    row['no_speech_prob'] = b['no_speech_prob']
+                    row['words'] = [{**w, 'start': max(row['start'], w['start']), 'end': min(row['end'], w['end'])}
+                                    for w in b['words'] if w['end'] >= row['start'] and w['start'] <= row['end']]
+                    evidence['status'] = 'revised'
+                    state['changed_ids'].append(row['id'])
+                elif accepted:
+                    evidence['status'] = 'confirmed'
+                row['short_review'] = evidence
+        state['applied'] = index + 1
+        main.save_json(cache_path, cache)
+    state['complete'] = True
+    main.save_json(cache_path, cache)
+    return state['added_ids'] + state['changed_ids']

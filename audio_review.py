@@ -86,6 +86,7 @@ class ReviewRecognizer:
         self.config = config
         self.model = None
         self.alternate = alternate
+        self.model_name = None
 
     def _load_model(self):
         if self.model is None:
@@ -111,6 +112,7 @@ class ReviewRecognizer:
                 except (OSError, ValueError):
                     pass
             print(f"Reviewing suspect audio with {label} ({device})...", flush=True)
+            self.model_name = label
             self.model = WhisperModel(name, device=device, compute_type=compute,
                                       download_root=str(main.resolve_setting(self.config["download_root"])), local_files_only=local)
 

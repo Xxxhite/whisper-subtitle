@@ -30,6 +30,13 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, "unresolved_audio", "Local audio review did not recover reliable replacement text.")
         if review.get("status") == "context_unresolved":
             add(row, "audio_context_uncertain", "A possible homophone/action mismatch remains after local audio review; check the surrounding dialogue.")
+        short = row.get('short_review', {})
+        if short.get('status') == 'recovered':
+            add(row, 'short_speech_recovered', 'Quiet gap speech was confirmed by two local models.', 'info')
+        elif short.get('status') == 'revised':
+            add(row, 'short_speech_revised', 'Two local models agreed on a replacement for a similar-sounding short line; review the wording.')
+        elif short.get('status') == 'uncertain':
+            add(row, 'short_speech_uncertain', 'Short-line review lacked reliable two-model agreement; existing wording was retained.', 'info')
         if row.get("gap_review"):
             add(row, "gap_speech_recovered", "Speech was recovered from an untranscribed gap; verify the new wording.", "info")
             if row["gap_review"].get("avg_logprob", 0) < -.5:

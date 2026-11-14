@@ -946,10 +946,12 @@ def run(args: argparse.Namespace) -> Path:
             if config["review_audio"]:
                 from audio_review import review_gaps, review_task
                 from transcript_refinement import refine
+                from short_speech import review_short_speech
                 try:
                     review_gaps(recognition_source, cache, cache_path, config)
                     review_task(recognition_source, cache, cache_path, config)
                     refine(recognition_source, cache, cache_path, config)
+                    review_short_speech(recognition_source, cache, cache_path, config)
                 except (OSError, RuntimeError, ValueError) as exc:
                     raise AppError(f"Audio review failed: {exc}. Completed results were saved.") from exc
             try:
