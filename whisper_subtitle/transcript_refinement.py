@@ -7,7 +7,8 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
+SPLIT_POLICY = 'lexical-and-rhythmic-v1'
 SCORES = ('avg_logprob', 'no_speech_prob', 'compression_ratio')
 
 
@@ -53,9 +54,9 @@ def _migrate(cache: dict, path: Path) -> None:
     """Restore protected v1 parents before applying the new split-only policy."""
     from . import cli as main
     state = cache.get('refinement', {})
-    if not state or state.get('version', 1) >= VERSION:
+    if not state or state.get('version', 1) >= 2:
         return
-    backup = path.with_name(f'task.before-refinement-v{VERSION}.json')
+    backup = path.with_name('task.before-refinement-v2.json')
     if not backup.exists():
         main.save_json(backup, cache)
     protected = {int(key) for key, row in state.get('originals', {}).items() if reliable_alignment(row)}
@@ -77,7 +78,7 @@ def _migrate(cache: dict, path: Path) -> None:
             restore.update(parents)
         else:
             if details:
-                details['version'] = VERSION
+                details['version'] = 2
             retained.append(row)
     # Joined groups may share roots; remove every old child of a restored group.
     changed = True
@@ -98,7 +99,7 @@ def _migrate(cache: dict, path: Path) -> None:
         raw.pop('refinement', None)
         retained.append(raw)
     cache['segments'] = sorted(retained, key=lambda r: (r['start'], r['end'], r['id']))
-    state['version'] = VERSION
+    state['version'] = 2
     state['restored_parent_ids'] = sorted(restore)
     main.save_json(path, cache)
     if restore:
@@ -111,13 +112,16 @@ def added_repetitions(source: str, target: str) -> bool:
                for match in re.finditer(r'(.{1,8}?)\1{2,}', before))
 
 
-def split_words(row: dict, *, maximum: float = 12, pause: float = .9) -> list[dict]:
+def split_words(row: dict, *, maximum: float = 12, pause: float = .9,
+                language: str | None = None, terms: tuple[str, ...] = ()) -> list[dict]:
     """Split only at aligned token boundaries, preserving every source character."""
     words = copy.deepcopy(row.get('words', []))
     if not words or row['end'] - row['start'] <= maximum:
         return []
     if compact(''.join(word['word'] for word in words)) != compact(row['text']):
         return []
+    from .word_boundaries import safe_token_ends
+    safe = safe_token_ends(words, language, terms)
     previous = row['start']
     for word in words:
         word['start'] = max(row['start'], previous, word['start'])
@@ -129,10 +133,17 @@ def split_words(row: dict, *, maximum: float = 12, pause: float = .9) -> list[di
     while index < len(words):
         duration = words[index]['end'] - words[begin]['start']
         if duration > maximum and index > begin:
-            choices = [j for j in range(begin, index) if words[j]['end'] - words[begin]['start'] >= 2
+            choices = [j for j in range(begin, index) if j in safe and words[j]['end'] - words[begin]['start'] >= 2
                        and (words[j + 1]['start'] - words[j]['end'] >= .18
                             or re.search(r'[、，,。！？!?…]$', words[j]['word']))]
-            end = choices[-1] if choices else index - 1
+            fallback = [j for j in range(begin, index) if j in safe]
+            if not choices and not fallback:
+                if index not in safe:
+                    index += 1
+                    continue
+                end = index
+            else:
+                end = choices[-1] if choices else fallback[-1]
             groups.append(words[begin:end + 1])
             begin, index = end + 1, end + 1
             continue
@@ -142,7 +153,7 @@ def split_words(row: dict, *, maximum: float = 12, pause: float = .9) -> list[di
         dangling = bool(re.search(r'[、，,のをがはにでとへやも]$', phrase))
         boundary = (gap >= pause and (complete or len(compact(phrase)) >= 6 and not dangling)
                     or duration >= 2 and complete)
-        if boundary and index + 1 < len(words):
+        if boundary and index in safe and index + 1 < len(words):
             groups.append(words[begin:index + 1])
             begin = index + 1
         index += 1
@@ -194,6 +205,93 @@ def original_segments(cache: dict) -> list[dict]:
 def _clear_translation(row: dict) -> None:
     for key in ('zh', 'model_zh', 'translation_text', 'rule_input_signature', 'rule_matches', 'glossary_terms', 'format_normalized'):
         row.pop(key, None)
+
+
+def protected_terms(config: dict) -> tuple[str, ...]:
+    from . import cli as main
+    from .dictionary_rules import RuleBook
+    path = main.resolve_setting(config['dictionary_file'])
+    if not path.exists():
+        return ()
+    book = RuleBook.load(path)
+    return tuple(sorted({r['source'] for r in book.rules['glossary'] if r.get('language', 'any') in {'ja', 'any'}}))
+
+
+def resplit_cached(cache: dict, path: Path, terms: tuple[str, ...]) -> list[int]:
+    """Rebuild only old splits crossing lexical boundaries, using current wording."""
+    from . import cli as main
+    from .word_boundaries import safe_token_ends
+    state = cache.get('refinement')
+    signature = main.fingerprint([VERSION, SPLIT_POLICY, terms])
+    if not state or state.get('version') == VERSION and state.get('split_signature') == signature:
+        return []
+    backup = path.with_name('task.before-word-boundaries-v3.json')
+    if not backup.exists():
+        main.save_json(backup, cache)
+    groups = {}
+    for row in cache['segments']:
+        details = row.get('refinement', {})
+        if details.get('parts', 1) > 1:
+            roots = tuple(details.get('parent_ids', [details.get('parent_id', row['id'])]))
+            groups.setdefault(roots, []).append(row)
+    changed = []
+    next_id = max([r['id'] for r in cache['segments']] + [int(k) for k in state.get('originals', {})]) + 1
+    for roots, group in groups.items():
+        group.sort(key=lambda r: (r['start'], r['end']))
+        if any(r.get('audio_review', {}).get('status') == 'omitted' or not r.get('words') for r in group):
+            continue
+        words = [copy.deepcopy(w) for r in group for w in r['words']]
+        text = ''.join(w['word'] for w in words).strip()
+        if compact(text) != compact(''.join(r['text'] for r in group)):
+            continue
+        safe = safe_token_ends(words, cache['language'], terms)
+        edges, offset = [], 0
+        for row in group[:-1]:
+            offset += len(row['words'])
+            edges.append(offset - 1)
+        if all(edge in safe for edge in edges):
+            continue
+        combined = {**group[0], 'start': group[0]['start'], 'end': group[-1]['end'], 'text': text, 'words': words}
+        parts = split_words(combined, language=cache['language'], terms=terms) or [
+            {'start': combined['start'], 'end': combined['end'], 'text': text, 'words': words}]
+        old = {(r['text'], r['start'], r['end']): r for r in group}
+        children = []
+        for index, part in enumerate(parts):
+            retained = old.get((part['text'], part['start'], part['end']))
+            if retained:
+                child = retained
+            else:
+                child = {**copy.deepcopy(combined), **part, 'id': group[0]['id'] if index == 0 else next_id}
+                if index:
+                    next_id += 1
+                _clear_translation(child)
+                child.pop('source_review', None)
+                child.pop('original_asr', None)
+                short = child.get('short_review', {})
+                if short.get('inserted') and short['inserted'] not in child['text']:
+                    child.pop('short_review', None)
+            child['refinement'] = {**group[0]['refinement'], 'version': VERSION, 'part': index + 1,
+                                   'parts': len(parts), 'word_boundaries': True}
+            children.append(child)
+        retired = {r['id'] for r in group}
+        cache['segments'] = [r for r in cache['segments'] if r['id'] not in retired] + children
+        changed.extend(roots)
+    for row in cache['segments']:
+        if row.get('refinement'):
+            row['refinement']['version'] = VERSION
+    cache['segments'].sort(key=lambda r: (r['start'], r['end'], r['id']))
+    state.update(version=VERSION, split_signature=signature, resplit_parent_ids=list(dict.fromkeys(changed)))
+    main.save_json(path, cache)
+    if changed:
+        print(f"Rebuilt {len(set(changed))} cached subtitle groups at complete-word boundaries.", flush=True)
+    return changed
+
+
+def upgrade_splits(cache: dict, path: Path, config: dict) -> list[int]:
+    if config.get('quality', 'high') != 'high':
+        return []
+    _migrate(cache, path)
+    return resplit_cached(cache, path, protected_terms(config))
 
 
 def _candidate(row: dict, language: str) -> bool:
@@ -248,17 +346,19 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
     if config.get('quality', 'high') != 'high':
         return []
     _migrate(cache, cache_path)
+    terms = protected_terms(config)
+    migrated = resplit_cached(cache, cache_path, terms)
     candidates = [row for row in cache['segments'] if _candidate(row, cache['language'])
                   and row.get('refinement', {}).get('version') != VERSION
                   and (row['end'] - row['start'] > 15 or low_confidence(row) or row.get('words') and row['end'] - row['start'] > 8)]
     if not candidates:
-        return []
+        return migrated
     backup = cache_path.with_name('task.before-transcript-refinement.json')
     if not backup.exists():
         main.save_json(backup, cache)
     state = cache.setdefault('refinement', {'version': VERSION, 'originals': {}})
     recognizer = ReviewRecognizer(config, alternate=True)
-    changed = []
+    changed = list(migrated)
     try:
         for parent in candidates:
             if parent not in cache['segments']:
@@ -338,7 +438,7 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                 else:
                     review['status'] = 'uncertain'
             state['originals'].setdefault(str(parent['id']), original)
-            parts = split_words(parent)
+            parts = split_words(parent, language=cache['language'], terms=terms)
             if parts:
                 next_id = max([row['id'] for row in cache['segments']] + [int(key) for key in state['originals']]) + 1
                 children = []
@@ -356,6 +456,8 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                 if review['status'] == 'revised':
                     changed.append(parent['id'])
             main.save_json(cache_path, cache)
+        state['split_signature'] = main.fingerprint([VERSION, SPLIT_POLICY, terms])
+        main.save_json(cache_path, cache)
     finally:
         recognizer.model = None
     return changed

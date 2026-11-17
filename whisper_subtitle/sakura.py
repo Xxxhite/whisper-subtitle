@@ -62,7 +62,16 @@ SYSTEM_PROMPT += (
     "\u539f\u6587\u7701\u7565\u8eab\u4f53\u6240\u5c5e\u4eba\u79f0\u65f6\u4fdd\u7559\u7701\u7565\u3002"
     "\u4fdd\u6301\u9648\u8ff0\u548c\u95ee\u53e5\u7684\u533a\u522b\uff0c\u4f7f\u5f79\u53e5\u6309\u4e2d\u6587\u4e60\u60ef\u8868\u8fbe\u3002"
 )
-PROMPT_VERSION = 7
+PROMPT_V7_SYSTEM = SYSTEM_PROMPT
+SYSTEM_PROMPT += (
+    "\u533a\u5206\u52a8\u4f5c\u7684\u65bd\u4e88\u8005\u3001\u63a5\u53d7\u8005\u548c\u53d7\u76ca\u8005\u3002"
+    "\u3066\u3082\u3089\u3046\u8868\u793a\u63a5\u53d7\u4ed6\u4eba\u7684\u52a8\u4f5c\uff0c\u4e0d\u8981\u53cd\u8f6c\u65b9\u5411\u3002"
+    "\u51ed\u58f0\u97f3\u60f3\u8c61\u52a8\u4f5c\u65f6\uff0c\u4fdd\u7559\u58f0\u97f3\u662f\u4f9d\u636e\u3001\u52a8\u4f5c\u662f\u60f3\u8c61\u5bf9\u8c61\u7684\u5173\u7cfb\u3002"
+)
+SYSTEM_PROMPT += '\u3066\u3042\u3052\u308b\u8868\u793a\u4e3a\u5bf9\u65b9\u505a\u67d0\u4e8b\uff0c\u4e0d\u8981\u7ffb\u6210\u8ba9\u5bf9\u65b9\u6765\u505a\u3002\u88ab\u52a8\u53e5\u4fdd\u7559\u52a8\u4f5c\u7684\u63a5\u53d7\u65b9\u5411\uff1b\u539f\u6587\u6ca1\u6709\u6027\u522b\u4fe1\u606f\u65f6\uff0c\u4e0d\u64c5\u81ea\u6dfb\u52a0\u7537\u5b69\u3001\u5973\u5b69\u7b49\u79f0\u547c\u3002'
+PROMPT_V8_SYSTEM = SYSTEM_PROMPT
+SYSTEM_PROMPT += "\u72ec\u7acb\u52a8\u4f5c\u62df\u58f0\u4fdd\u6301\u7b80\u77ed\uff0c\u4e0d\u6dfb\u52a0\u4eba\u79f0\u6216\u59d3\u540d\u3002\u7ed3\u5408\u524d\u540e\u6587\u533a\u5206\u62d6\u957f\u97f3\u526f\u8bcd\u548c\u4eba\u540d\uff0c\u4fdd\u7559\u613f\u671b\u53e5\u4e2d\u63d0\u4f9b\u548c\u63a5\u53d7\u52a8\u4f5c\u7684\u65b9\u5411\u3002"
+PROMPT_VERSION = 9
 SOURCE_CONTEXT_PREFIX = "\u539f\u6587\u4e0a\u4e0b\u6587\uff08\u4ec5\u4f9b\u53c2\u8003\uff09\uff1a\n"
 _PROMPT_MARKERS = (
     "Glossary (source -> translation # notes; may be empty):",
@@ -70,7 +79,7 @@ _PROMPT_MARKERS = (
     "translate the following Japanese text into Simplified Chinese",
     "Reference translations (context only):", "Glossary entries (context only):",
     "<|im_start|>", "<|im_end|>",
-    SYSTEM_PROMPT, PROMPT_V6_SYSTEM, PROMPT_V5_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V2_SYSTEM, LEGACY_SYSTEM_PROMPT, INPUT_PREFIX.strip(),
+    SYSTEM_PROMPT, PROMPT_V8_SYSTEM, PROMPT_V7_SYSTEM, PROMPT_V6_SYSTEM, PROMPT_V5_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V2_SYSTEM, LEGACY_SYSTEM_PROMPT, INPUT_PREFIX.strip(),
     SOURCE_CONTEXT_PREFIX.strip(),
     "<reference_source>", "</reference_source>",
     "<reference_translations>", "</reference_translations>",
@@ -140,8 +149,8 @@ def validate_translations(lines: list[str], translations: list[str], *,
     for source, translated in pairs:
         from .source_checks import artifact
         from .translation_checks import meaning_errors
-        if meaning_errors(source, translated):
-            raise ContextLeakError('Sakura changed a source relationship or clause type; the response was rejected.')
+        if meaning_errors(source, translated, source_context):
+            raise MeaningError('Sakura changed a source relationship or clause type; the response was rejected.')
         if contains_emoji(translated) and not contains_emoji(source):
             raise SakuraError("Sakura introduced emoji into the translation; the response was rejected.")
         if has_excessive_expansion(translated, source):
@@ -236,6 +245,10 @@ class ContextLeakError(SakuraError):
     """Reference leakage or unexpected continuation suitable for an isolated retry."""
 
 
+class MeaningError(ContextLeakError):
+    """A source-conditioned meaning check failed."""
+
+
 class UntranslatedError(SakuraError):
     def __init__(self, indices: list[int]):
         self.indices = indices
@@ -245,6 +258,28 @@ class UntranslatedError(SakuraError):
 class NoRedirect(request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def relationship_guidance(lines: list[str], source_context: str = "") -> str:
+    """Reinforce only grammar explicitly present in the current source."""
+    source = '\n'.join(lines)
+    notes = []
+    if re.search(r'してあげたら', source):
+        notes.append('\u8bed\u6cd5\u63d0\u793a\uff1a\u3042\u3052\u308b\u7684\u4e3b\u8bed\u63d0\u4f9b\u52a8\u4f5c\uff0c\u5bf9\u65b9\u63a5\u53d7\u52a8\u4f5c\u3002\u6839\u636e\u539f\u6587\u548c\u8bed\u5883\u786e\u5b9a\u4eba\u79f0\uff0c\u4fdd\u6301\u52a8\u4f5c\u65b9\u5411\u3002')
+    if re.search(r'てもらいたい', source):
+        notes.append('\u8bed\u6cd5\u63d0\u793a\uff1a\u3082\u3089\u3046\u7684\u4e3b\u8bed\u63a5\u53d7\u52a8\u4f5c\uff0c\u306b\u6807\u8bb0\u52a8\u4f5c\u7684\u63d0\u4f9b\u8005\u3002\u6839\u636e\u539f\u6587\u548c\u8bed\u5883\u786e\u5b9a\u4eba\u79f0\uff0c\u4fdd\u6301\u52a8\u4f5c\u65b9\u5411\u3002')
+    from .translation_checks import action_sound, intimate_context
+    if action_sound(source):
+        notes.append('\u8fd9\u662f\u72ec\u7acb\u52a8\u4f5c\u62df\u58f0\uff0c\u4f7f\u7528\u7b80\u77ed\u7684\u52a8\u4f5c\u8868\u8fbe\uff0c\u4fdd\u7559\u7701\u7565\u7684\u4eba\u79f0\u3002')
+    if re.search(r'ー+っと',source):
+        notes.append('\u62d6\u957f\u97f3\u300c\u30fc\u3063\u3068\u300d\u7ed3\u5408\u76f8\u90bb\u52a8\u4f5c\u7406\u89e3\u4e3a\u526f\u8bcd\uff0c\u907f\u514d\u6dfb\u52a0\u539f\u6587\u6ca1\u6709\u7684\u4eba\u540d\u3002')
+    if re.search(r'(?:舐め|なめ)て[ほ欲]しい(?:ですか)?[?？]',source) and not re.search(r'(?:君|あなた|彼|彼女|私)に',source):
+        notes.append('\u8fd9\u53e5\u8bdd\u8be2\u95ee\u542c\u8005\u662f\u5426\u60f3\u63a5\u53d7\u8bf4\u8bdd\u8005\u7684\u8214\u8033\u670d\u52a1\uff0c\u4f7f\u7528\u201c\u60f3\u8ba9\u6211\u8214\u2026\u2026\u201d\u7684\u52a8\u4f5c\u65b9\u5411\u3002')
+    if re.search(r'耳.{0,14}(?:なぞられ|舐められ|なめられ|触れられ)',source) and not re.search(r'彼|彼女|あの人|その人|友達',source+'\n'+source_context):
+        notes.append('\u8fd9\u53e5\u8bdd\u63cf\u8ff0\u542c\u8005\u8033\u6735\u88ab\u89e6\u78b0\u540e\u7684\u53cd\u5e94\uff0c\u4f7f\u7528\u7b2c\u4e8c\u4eba\u79f0\u6216\u7701\u7565\u4eba\u79f0\u3002')
+    if intimate_context(source+'\n'+source_context) and re.search(r'行[くこきっ]|い[くこきっ]',source):
+        notes.append('\u7ed3\u5408\u4eb2\u5bc6\u884c\u4e3a\u8bed\u5883\u7406\u89e3\u300c\u884c\u304f\uff0f\u3044\u304f\u300d\u8868\u793a\u9ad8\u6f6e\uff1b\u660e\u786e\u7684\u51fa\u884c\u3001\u5de5\u4f5c\u6216\u8ba1\u5212\u8bed\u5883\u4fdd\u6301\u65e5\u5e38\u542b\u4e49\u3002')
+    return '\n'.join(notes)
 
 
 class SakuraServer:
@@ -339,8 +374,17 @@ class SakuraServer:
         active_history = history if attempt == 0 and len(lines) > 1 else []
         try:
             return self._translate(lines, active_history, glossary, attempt=attempt, source_context=active_source,
-                                   check_history=history if active_source else active_history)
-        except ContextLeakError:
+                                   check_history=history if active_source else active_history, check_source_context=source_context)
+        except ContextLeakError as exc:
+            if isinstance(exc, MeaningError) and len(lines) == 1 and attempt > 0:
+                clauses = re.findall(r'[^、，,。！？!?]+[、，,。！？!?]*', lines[0])
+                if (2 <= len(clauses) <= 4 and ''.join(clauses) == lines[0]
+                        and all(len(_compact(clause)) >= 4 for clause in clauses)):
+                    translated = [''.join(' '.join(self._translate([clause], [], glossary, attempt=attempt,
+                                                                    source_context='', check_source_context=source_context)).strip()
+                                           for clause in clauses)]
+                    validate_translations(lines, translated, source_context=source_context)
+                    return translated
             if not (active_source or active_history):
                 raise
             print("Sakura included reference text or unexpected repetition; retrying each entry without context.", flush=True)
@@ -351,17 +395,20 @@ class SakuraServer:
                 if sound is not None:
                     result.append(sound)
                     continue
-                translated = self._translate([line], [], glossary, attempt=max(1, attempt), source_context="")
+                translated = self._translate([line], [], glossary, attempt=max(1, attempt), source_context="", check_source_context=source_context)
                 result.append(" ".join(translated))
             return result
 
     def _translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int, source_context: str,
-                   check_history: list[str] | None = None) -> list[str]:
+                   check_history: list[str] | None = None, check_source_context: str | None = None) -> list[str]:
         system = SYSTEM_PROMPT
         if source_context:
             system += "\n\n" + SOURCE_CONTEXT_PREFIX + "<reference_source>\n" + source_context + "\n</reference_source>"
         if history:
             system += "\n\n<reference_translations>\n" + "\n".join(history)[-600:] + "\n</reference_translations>"
+        guidance = relationship_guidance(lines, source_context if check_source_context is None else check_source_context)
+        if guidance:
+            system += "\n\n" + guidance
         user = ""
         if glossary.strip():
             user += "\u672f\u8bed\u8868\uff1a\n" + glossary.strip() + "\n\n"
@@ -396,8 +443,11 @@ class SakuraServer:
         if text.startswith("```") and text.endswith("```"):
             text = "\n".join(text.splitlines()[1:-1])
         translated = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines)==len(translated):
+            from .translation_checks import normalize_participants
+            translated=[normalize_participants(source,target) for source,target in zip(lines,translated)]
         validate_translations(lines, translated, history=history if check_history is None else check_history,
-                              source_context=source_context)
+                              source_context=source_context if check_source_context is None else check_source_context)
         return translated
 
     def stop(self) -> None:

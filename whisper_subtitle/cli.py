@@ -618,8 +618,8 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                     try:
                         source_lines = [source_text(s) for s in pending]
                         glossary = "\n".join(value for value in (config["sakura"]["glossary"].strip(), batch_glossary(pending)) if value)
-                        from .audio_review import preceding_context
-                        source_context = preceding_context(pending[0], segments)
+                        from .translation_checks import context_for
+                        source_context = context_for(pending[0], segments)
                         translated = server.translate(source_lines, history, glossary, attempt=attempt, source_context=source_context)
                         validate_translations(source_lines, translated)
                         if len(pending) > 1 and len(translated) != len(pending):
@@ -680,8 +680,8 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
     if options["backend"] == "local":
         signature_data = {"backend": "local", "language": "zh", "conversion": "opencc-t2s"}
     if options["backend"] == "sakura":
-        from .sakura import LEGACY_SYSTEM_PROMPT, PROMPT_V2_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_V5_SYSTEM, PROMPT_V6_SYSTEM, PROMPT_VERSION, SYSTEM_PROMPT as SAKURA_PROMPT, is_invalid_translation
-        from .audio_review import preceding_context
+        from .sakura import LEGACY_SYSTEM_PROMPT, PROMPT_V2_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_V5_SYSTEM, PROMPT_V6_SYSTEM, PROMPT_V7_SYSTEM, PROMPT_V8_SYSTEM, PROMPT_VERSION, SYSTEM_PROMPT as SAKURA_PROMPT, is_invalid_translation
+        from .translation_checks import context_for
         signature_data = {"backend": "sakura", "language": cache["language"], "settings": config["sakura"], "prompt": SAKURA_PROMPT, "prompt_version": PROMPT_VERSION}
         legacy_signature = fingerprint({key: value for key, value in {**signature_data, "prompt": LEGACY_SYSTEM_PROMPT}.items() if key != "prompt_version"})
         accepted = {legacy_signature, fingerprint(signature_data)}
@@ -689,6 +689,8 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
         accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V4_SYSTEM, "prompt_version": 4}))
         accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V5_SYSTEM, "prompt_version": 5}))
         accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V6_SYSTEM, "prompt_version": 6}))
+        accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V7_SYSTEM, "prompt_version": 7}))
+        accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V8_SYSTEM, "prompt_version": 8}))
         for prompt in (PROMPT_V2_SYSTEM, PROMPT_V2_SYSTEM.replace("Translate short utterances as given, without prepending earlier dialogue. ", "")):
             accepted.add(fingerprint({**signature_data, "prompt": prompt, "prompt_version": 2}))
         if not retranslate and cache.get("translation_signature") in accepted:
@@ -697,7 +699,7 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
                 if not segment.get("zh"):
                     continue
                 history = [s.get("model_zh", s.get("zh", "")) for s in segments[max(0, index - options["context_lines"]):index]]
-                context = preceding_context(segment, segments)
+                context = context_for(segment, segments)
                 if any(is_invalid_translation(text, source_text(segment), history=history, source_context=context)
                        for text in (segment.get("model_zh", segment["zh"]), segment["zh"])):
                     rejected.append(segment["id"])
@@ -729,9 +731,9 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
     config["_rulebook"] = book
     if options['backend'] == 'api':
         from .source_checks import artifact
-        from .translation_checks import meaning_errors
+        from .translation_checks import meaning_errors, context_for
         rejected = [s for s in segments if s.get('zh') and
-                    (artifact(s['zh']) or meaning_errors(source_text(s), s['zh']))]
+                    (artifact(s['zh']) or meaning_errors(source_text(s), s['zh'], context_for(s, segments)))]
         if rejected:
             backup = cache_path.with_name('task.before-translation-review-v1.json')
             if not backup.exists():
@@ -740,7 +742,11 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
                 segment.pop('zh', None)
                 segment.pop('model_zh', None)
             print(f"Translation checks: refreshing {len(rejected)} affected entries.", flush=True)
+    from .counting import apply_translations
+    numeric = apply_translations(cache, book)
     save_json(cache_path, cache)
+    if numeric:
+        print(f"Rendered {numeric} standalone numbers locally.", flush=True)
     if refreshed:
         print(f"Dictionary input changes: refreshing {refreshed} affected entries.", flush=True)
     if cache["language"] == "zh":
@@ -807,8 +813,10 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
                         if contains_emoji(translated[segment["id"]]) and not contains_emoji(source_text(segment)):
                             continue
                         from .source_checks import artifact
-                        from .translation_checks import meaning_errors
-                        if artifact(translated[segment['id']]) or meaning_errors(source_text(segment), translated[segment['id']]):
+                        from .translation_checks import meaning_errors, context_for
+                        from .translation_checks import normalize_participants
+                        translated[segment['id']]=normalize_participants(source_text(segment),translated[segment['id']])
+                        if artifact(translated[segment['id']]) or meaning_errors(source_text(segment), translated[segment['id']], context_for(segment, segments)):
                             continue
                         if is_untranslated_japanese(source_text(segment), translated[segment["id"]]):
                             segment["needs_audio_review"] = True
@@ -964,13 +972,18 @@ def run(args: argparse.Namespace) -> Path:
         for pass_number in range(2):
             if config["review_audio"]:
                 from .audio_review import review_gaps, review_task
-                from .transcript_refinement import refine
+                from .transcript_refinement import refine, upgrade_splits
                 from .short_speech import review_short_speech
                 try:
+                    upgrade_splits(cache, cache_path, config)
+                    from .alignment_review import review_alignment
+                    review_alignment(recognition_source, cache, cache_path, config)
                     review_gaps(recognition_source, cache, cache_path, config)
                     review_task(recognition_source, cache, cache_path, config)
                     refine(recognition_source, cache, cache_path, config)
                     review_short_speech(recognition_source, cache, cache_path, config)
+                    from .count_review import review_counts
+                    review_counts(recognition_source, cache, cache_path, config)
                 except (OSError, RuntimeError, ValueError) as exc:
                     raise AppError(f"Audio review failed: {exc}. Completed results were saved.") from exc
             try:

@@ -26,6 +26,18 @@ root. Run the application from the project directory:
 python main.py "D:\audio\sample.mp3"
 ```
 
+`word_boundaries.py` maps complete lexical groups back to ASR token times using
+Janome and active glossary terms. `context_vocabulary.py` proposes bounded
+phonetic vocabulary hints from preceding source topics; `source_review.py`
+accepts changes only after independent acoustic confirmation. These helpers use
+the existing models and preserve the raw transcript in task backups.
+`counting.py` handles explicit numeric rendering; `count_review.py` checkpoints
+local acoustic evidence for uncertain counts and numeric clusters.
+`alignment_review.py` checks weak prefixes, collapsed tails, and duplicate dialogue
+using independent timed hypotheses. Contextual spelling review can inspect the
+left and right audio channels separately. `translation_checks.py` supplies shared
+source-conditioned meaning checks for translation, cache reuse, and reports.
+
 ## Local resources
 
 The following directories and files remain on the local machine and are excluded
@@ -38,6 +50,7 @@ from version control:
 | `models/` | Downloaded/copied Whisper, Sakura, and separation models |
 | `runtime/cuda/`, `runtime/llama/`, `runtime/separate/` | GPU libraries and optional executables |
 | `.cache/` | Transcripts, resumable translations, extracted vocals, reports, and local backups |
+| `tests/` | Local regression checks and audio-derived fixtures |
 | `.idea/`, `.vscode/` | Local editor settings |
 | `__pycache__/` | Regenerable Python bytecode |
 

@@ -24,10 +24,26 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
         if issue:
             add(row, 'source_' + issue, 'Malformed or nonlexical source text requires audio confirmation; excluded from final subtitles.', 'info')
         safety = row.get('source_review', {})
+        alignment=row.get('alignment_review',{})
+        if alignment.get('status')=='recovered':
+            add(row,'word_alignment_repaired','Two local models confirmed a weak boundary or collapsed tail correction; raw ASR is retained.','info')
+        elif alignment.get('status')=='uncertain':
+            add(row,'collapsed_alignment_uncertain','A weak opening or collapsed word tail remains unconfirmed; inspect this source region.')
         if safety.get('status') == 'recovered':
             add(row, 'source_recovered', 'Acoustic source verification recovered or corrected this entry; original ASR is retained.', 'info')
         elif safety.get('status') == 'unresolved':
             add(row, 'source_verification_uncertain', 'Contextual spelling or audio checks did not provide sufficient agreement; inspect the retained source.')
+        if safety.get('remaining_hints'):
+            add(row, 'source_verification_partial', 'Some proposed spellings remain unconfirmed; inspect the retained source words.')
+        if safety.get('status') == 'retimed':
+            add(row, 'source_timing_repaired', 'Two local hypotheses narrowed an implausibly long short phrase to observed word times.', 'info')
+        count = row.get('count_review', {})
+        if count.get('status') == 'recovered':
+            add(row, 'count_recovered', 'Two local models confirmed this count; raw ASR is retained.', 'info')
+            if count.get('soft'):
+                add(row, 'count_low_confidence', 'Quiet count recovery used weaker acoustic evidence with unprompted corroboration; verify the number.')
+        elif count.get('status') == 'uncertain':
+            add(row, 'count_uncertain', 'Local count verification did not confirm a replacement; inspect the retained source.')
         if implausible_duplicate(row, cache['segments']):
             add(row, 'implausible_source_duplicate', 'A long repeated source sentence occupies an unusually short time interval.')
         if is_pure_emoji(row["text"]):
@@ -71,8 +87,8 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
         if not target:
             add(row, "missing_translation", "No completed Chinese translation.")
             continue
-        from .translation_checks import meaning_errors
-        for meaning in meaning_errors(source_text(row), target):
+        from .translation_checks import meaning_errors, context_for
+        for meaning in meaning_errors(source_text(row), target, context_for(row, cache['segments'])):
             add(row, 'translation_' + meaning, 'A source-conditioned check found a changed relationship or clause type.')
         if any(row.get("rule_matches", {}).values()):
             add(row, "dictionary_rules_applied", "See rule_ids for the matching rules.", "info")

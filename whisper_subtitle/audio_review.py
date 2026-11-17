@@ -39,17 +39,19 @@ def isolated_short(segment: dict, segments: list[dict]) -> bool:
     return len(segment["text"]) <= 20 and min(before, after) >= 4 and max(before, after) >= 6
 
 
-def decode_window(source: Path, start: float, end: float):
+def decode_window(source: Path, start: float, end: float, *, channel: str | None = None):
     import av
     import numpy as np
 
+    if channel not in {None,'left','right'}:
+        raise ValueError('Audio review channel must be left or right.')
     chunks = []
     with av.open(str(source)) as container:
         stream = container.streams.audio[0]
         origin = float(stream.start_time or 0) * stream.time_base
         begin, finish = max(0.0, start) + origin, end + origin
         container.seek(max(0, int(begin / stream.time_base)), stream=stream)
-        resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+        resampler = av.AudioResampler(format="s16", layout="stereo" if channel else "mono", rate=16000)
         for frame in container.decode(audio=0):
             if frame.time is not None and frame.time > finish + 0.1:
                 break
@@ -58,6 +60,8 @@ def decode_window(source: Path, start: float, end: float):
                 if time is None:
                     continue
                 samples = converted.to_ndarray().reshape(-1)
+                if channel:
+                    samples = samples.reshape(-1,2)[:,0 if channel=='left' else 1]
                 first = max(0, round((begin - time) * 16000))
                 last = min(len(samples), round((finish - time) * 16000))
                 if last > first:
@@ -83,7 +87,7 @@ def is_intro_candidate(segment: dict, segments: list[dict]) -> bool:
 
 def closing_phrase(text: str) -> bool:
     key = ''.join(c for c in unicodedata.normalize('NFKC', text) if c.isalnum())
-    return bool(re.fullmatch(r'(?:ご)?視(?:聴)?(?:ありがとう(?:ございました|ございます)?|感謝)?|おやすみ(?:なさい)?', key))
+    return bool(re.fullmatch(r'(?:ご)?視(?:聴)?(?:ありがとう(?:ございました|ございます)?|感謝)?|おやすみ(?:なさい)?|(?:おわり|終わり|おしまい|終了)(?:です)?', key))
 
 
 def weak_closing(segment: dict, cache: dict, speech: float) -> bool:
@@ -155,6 +159,27 @@ class ReviewRecognizer:
                                           vad_filter=False, word_timestamps=True, initial_prompt=context or None)
         return [{"start": row.start, "end": row.end, "text": row.text.strip(), **recognition_fields(row)}
                 for row in iterator]
+
+    def counting(self, audio, *, hinted: bool = True) -> list[dict]:
+        """Decode a quiet count once, with a topic hint but no example sequence."""
+        import numpy as np
+        from .transcript_refinement import recognition_fields
+        self._load_model()
+        peak = float(np.percentile(np.abs(audio), 99.5)) if len(audio) else 0
+        if peak > .0001:
+            audio = np.clip(audio * min(8.0, max(1.0, .25 / peak)), -1, 1).astype(np.float32)
+        iterator, _ = self.model.transcribe(audio, language='ja', beam_size=5, best_of=1,
+                    temperature=0.0, condition_on_previous_text=False, vad_filter=False, word_timestamps=True,
+                    without_timestamps=True,
+                    repetition_penalty=1.15,
+                    initial_prompt='カウントダウン。' if hinted else None)
+        # A counting window is shorter than one decoder chunk. Consume it once;
+        # repeated seeking through a stretched final word can otherwise stall.
+        try:
+            row = next(iterator, None)
+            return [{'start':row.start,'end':row.end,'text':row.text.strip(),**recognition_fields(row)}] if row else []
+        finally:
+            iterator.close()
 
 
 def gap_windows(segments: list[dict], speech: list[dict], duration: float) -> list[tuple[float, float]]:
