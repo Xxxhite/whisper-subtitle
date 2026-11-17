@@ -1,18 +1,32 @@
 # Dictionary and quality reports
 
-The application reads `dictionary.json` from the project directory by default. It includes 83 Japanese-to-Chinese glossary hints: 52 adapted from [GalTransl](https://github.com/GalTransl/GalTransl/tree/main/Dict), 29 manually curated subtitle-review terms and spelling variants, and two standalone repeated-sound hints. The `pre` and `post` stages start empty. `dictionary.example.json` demonstrates the schema with disabled fictional entries; copy and edit individual examples, then set `enabled` to `true` to use them.
+[Quick start](../README.en.md) · [Configuration](CONFIGURATION.md)
 
-## Included GalTransl terms
+The application reads `dictionary.json` by default. It contains Japanese-to-Chinese
+glossary hints adapted from GalTransl, terms curated during subtitle review, and
+standalone repeated-sound hints. The `pre` and `post` stages start empty.
+`dictionary.example.json` provides disabled examples for custom rules.
 
-The default glossary covers common forms of address, character archetypes, fantasy/game terms, and an adult-context subset requested for ASMR material. The GalTransl subset contains 32 general terms, 17 adult-context terms, and three spelling variants. Entries apply only to Japanese input and are sent only when the source text contains the matching term. Both Sakura and the API translator receive these hints. English, Korean, and local Chinese conversion keep their existing behavior.
+## Included glossary
 
-The import preserves the selected upstream translations and adds English context notes. Five ambiguous/style-specific general entries remain omitted. The 17 adult-context entries use IDs starting with `galtransl-asmr-`; their three kana/width variants start with `galtransl-asmr-alias-`. Set these entries to `enabled: false` to disable this subset. The complete 54-pair upstream snapshot, source hashes, adaptation notes, and GPL version 3 license are preserved in [third_party/galtransl](../third_party/galtransl/README.md). Upstream game-script pre/post replacement files, including broad single-character slurred-speech corrections, remain disabled.
+The glossary covers forms of address, character archetypes, game/fantasy terms,
+audio-work vocabulary, and an adult-context subset for ASMR material. Matching
+Japanese entries receive the hints with either API or Sakura translation.
 
-Edit the entries in `dictionary.json` to change preferred translations, set `enabled` to `false` to disable individual terms, or replace its `glossary` array with `[]` to disable the included glossary. The source snapshot is a reference copy; changes there do not affect translation.
+Edit preferred translations in `dictionary.json`, set an entry's `enabled` to
+`false` to disable it, or replace `glossary` with `[]` to disable all hints. The
+GalTransl adult-context entries use IDs beginning with `galtransl-asmr-` or
+`galtransl-asmr-alias-`. Curated terms use `review-ja-`; repeated sounds use
+`review-sound-`.
 
-On the next normal run, matching cached Japanese entries are translated again with the glossary. Unmatched entries and the transcript are reused. No `--retranslate` argument is needed.
+The upstream snapshot, attribution, adaptation notes, and license remain in
+[third_party/galtransl](../third_party/galtransl/README.md). That snapshot is a
+reference copy; edit the active dictionary to change translation. Broad upstream
+pre/post replacements remain disabled.
 
-For a separate empty dictionary, use:
+After an edit, rerun the normal subtitle command. Only affected translations are
+refreshed; the transcript and unaffected translations are reused. For a separate
+empty dictionary, use:
 
 ```json
 {
@@ -22,16 +36,6 @@ For a separate empty dictionary, use:
   "post": []
 }
 ```
-
-## Reviewed subtitle terms
-
-Rules with IDs starting with `review-ja-` were curated from local subtitle review. They cover beverage names, household/recovery items, audio-work terminology, and adult-product vocabulary, including kana variants. These are glossary hints with English context notes; no source-text or post-translation replacements were added.
-
-`review-ja-025` through `review-ja-028` add the back of the earlobe, the tongue tip, lifting the hips, and a hug from behind. They preserve anatomical position and action scope through model hints. Matching entries alone are retranslated.
-
-`review-ja-029` supplies the meaning of `おねだり` as begging or asking for something, retaining the request's participants instead of changing it into waiting.
-
-The Joyful Medley tea-latte name was checked against the [Starbucks Japan product page](https://menu.starbucks.co.jp/4524785348004). Its Chinese rendering retains the product name in English. Ambiguous personal names, apparent ASR hallucinations, and whole-sentence errors were left for separate review. Local evidence and a pre-update dictionary backup are kept in ignored `.cache/` directories.
 
 ## Three stages
 

@@ -11,7 +11,7 @@ whisper-subtitle/
   config.example.json      Shared configuration template
   dictionary.json          Shared, editable translation glossary
   dictionary.example.json  Disabled examples for custom rules
-  docs/                    Dictionary guide and project layout
+  docs/                    Configuration, dictionary, and project guides
   prompts/                 Japanese API guidelines and source records
   third_party/             Imported dictionary data, attribution, and license
   runtime/README.md        Local runtime provenance
@@ -62,6 +62,7 @@ On another computer, follow the installation instructions in [README.md](../READ
 to recreate `.venv/` and `config.json`. Whisper models download into `models/` when
 needed. GPU libraries and optional Sakura/separation resources are configured
 separately; see [runtime/README.md](../runtime/README.md).
+For configuration options and cache behavior, see [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Review repository changes
 
