@@ -61,8 +61,11 @@ class RuleBook:
                 if type(rule.get("enabled", True)) is not bool or rule.get("language", "any") not in {"any", "zh", "ja", "en", "ko"}:
                     raise DictionaryError(f"Invalid enabled/language in rule {rule['id']}.")
                 mode = rule.get("match", "contains" if stage == "glossary" else "exact")
-                if mode not in {"exact", "contains"} or not isinstance(rule.get("note", ""), str):
+                if mode not in {"exact", "contains", "sound"} or not isinstance(rule.get("note", ""), str):
                     raise DictionaryError(f"Invalid match/note in rule {rule['id']}.")
+                if mode == 'sound' and (stage != 'glossary' or rule.get('language') != 'ja'
+                                        or not re.fullmatch(r'[ぁ-ゖァ-ヺー]{1,8}', rule['source'])):
+                    raise DictionaryError('Sound matching requires a Japanese glossary rule with one kana sound unit.')
                 conditions = rule.get("when", {})
                 allowed = {"source_equals", "source_contains", "translation_equals", "translation_contains"}
                 if not isinstance(conditions, dict) or set(conditions) - allowed or any(not isinstance(v, str) or not v for v in conditions.values()):
@@ -92,8 +95,16 @@ class RuleBook:
         return [rule for rule in self.rules[stage] if rule.get("language", "any") in {"any", language}]
 
     def match_glossary(self, text: str, language: str) -> list[dict]:
-        matches = [rule for rule in self._active("glossary", language)
-                   if _matches(text, rule["source"], rule["match"])]
+        from subtitle_processing import repeated_kana, kana_unit_key
+        sound = repeated_kana(text) if language == 'ja' else None
+        matches = []
+        for rule in self._active('glossary', language):
+            if rule['match'] == 'sound':
+                if sound and kana_unit_key(sound[1]) == kana_unit_key(rule['source']):
+                    # Supply the spelling present in this entry so isolated model requests retain the hint.
+                    matches.append({**rule, 'source': sound[1]})
+            elif _matches(text, rule['source'], rule['match']):
+                matches.append(rule)
         destinations = {}
         for rule in matches:
             if rule["source"] in destinations and destinations[rule["source"]] != rule["target"]:
@@ -108,7 +119,9 @@ class RuleBook:
             seen.add(rule["source"])
             start = 0
             spans = []
-            while (start := text.find(rule["source"], start)) >= 0:
+            if rule['match'] == 'sound' and not any(covered):
+                spans.append((0, len(text)))
+            while rule['match'] != 'sound' and (start := text.find(rule["source"], start)) >= 0:
                 end = start + len(rule["source"])
                 if not any(covered[start:end]):
                     spans.append((start, end))

@@ -13,8 +13,26 @@ def is_pure_emoji(text: str) -> bool:
 
 
 def eligible_segments(cache: dict) -> list[dict]:
+    from source_checks import artifact
     return [row for row in cache["segments"] if not is_pure_emoji(row["text"])
+            and not artifact(row['text'])
             and row.get("audio_review", {}).get("status") != "omitted"]
+
+
+def repeated_kana(text: str) -> tuple[str, str, int] | None:
+    """Read a standalone repeated kana sound, retaining its actual unit spelling."""
+    text = ''.join(c for c in unicodedata.normalize('NFKC', text)
+                   if not c.isspace() and not unicodedata.category(c).startswith('P'))
+    match = re.fullmatch(r'([あいうえおんアイウエオンー]{0,3}?)([ぁ-ゖァ-ヺー]{1,8}?)\2+', text)
+    if not match:
+        return None
+    prefix, unit = match.groups()
+    return prefix, unit, (len(text) - len(prefix)) // len(unit)
+
+
+def kana_unit_key(text: str) -> str:
+    text = unicodedata.normalize('NFKC', text)
+    return ''.join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in text).replace('ー', '')
 
 
 def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimum: float = .8) -> list[dict]:
@@ -22,7 +40,9 @@ def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimu
         return max(0, int(seconds * 100 + .5))
 
     limit = ticks(max((row["end"] for row in segments), default=0))
-    rows = [dict(row) for row in segments if not contains_emoji(row["text"]) and not contains_emoji(row.get("zh", ""))
+    from source_checks import artifact
+    rows = [dict(row) for row in segments if not artifact(row['text']) and (not row.get('zh') or not artifact(row['zh']))
+            and not contains_emoji(row["text"]) and not contains_emoji(row.get("zh", ""))
             and row.get("audio_review", {}).get("status") != "omitted"]
     if merge_sounds:
         rows = merge_repeated_sounds(rows)

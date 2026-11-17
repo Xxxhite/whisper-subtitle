@@ -609,6 +609,62 @@
       "target": "通孔式",
       "match": "contains",
       "note": "Through-hole/open-ended design, when discussing a physical product."
+    },
+    {
+      "id": "review-sound-001",
+      "language": "ja",
+      "source": "しこ",
+      "target": "摩擦",
+      "match": "sound",
+      "note": "Repeated rubbing/stroking sound. Translate the sound briefly; do not invent dialogue. Applies only to standalone repetitions."
+    },
+    {
+      "id": "review-sound-002",
+      "language": "ja",
+      "source": "しっこ",
+      "target": "摩擦",
+      "match": "sound",
+      "note": "Geminated ASR variant of the repeated rubbing sound. This hint applies only to standalone repetitions, not ordinary words or sentences."
+    },
+    {
+      "id": "review-ja-025",
+      "language": "ja",
+      "source": "耳たぶの裏",
+      "target": "耳垂背面",
+      "match": "contains",
+      "note": "The back of the earlobe; preserve the side instead of changing it to the inside."
+    },
+    {
+      "id": "review-ja-026",
+      "language": "ja",
+      "source": "舌先",
+      "target": "舌尖",
+      "match": "contains",
+      "note": "Tip of the tongue; preserve the anatomical part."
+    },
+    {
+      "id": "review-ja-027",
+      "language": "ja",
+      "source": "腰を上げ",
+      "target": "抬起腰",
+      "match": "contains",
+      "note": "A local instruction to lift the hips in a body-position context; preserve the action's scope."
+    },
+    {
+      "id": "review-ja-028",
+      "language": "ja",
+      "source": "バックハグ",
+      "target": "从背后环抱",
+      "match": "contains",
+      "note": "A hug from behind; preserve who is holding whom from the surrounding dialogue."
+    },
+    {
+      "id": "review-ja-029",
+      "language": "ja",
+      "source": "おねだり",
+      "target": "撒娇请求",
+      "match": "contains",
+      "note": "Begging or asking for something; preserve who makes the request. Do not turn the request into waiting or invent another participant."
     }
   ],
   "post": []

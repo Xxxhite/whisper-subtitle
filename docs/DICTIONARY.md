@@ -1,6 +1,6 @@
 # Dictionary and quality reports
 
-The application reads `dictionary.json` from the project directory by default. It includes 76 Japanese-to-Chinese glossary hints: 52 adapted from [GalTransl](https://github.com/GalTransl/GalTransl/tree/main/Dict), plus 24 manually curated subtitle-review terms and spelling variants. The `pre` and `post` stages start empty. `dictionary.example.json` demonstrates the schema with disabled fictional entries; copy and edit individual examples, then set `enabled` to `true` to use them.
+The application reads `dictionary.json` from the project directory by default. It includes 83 Japanese-to-Chinese glossary hints: 52 adapted from [GalTransl](https://github.com/GalTransl/GalTransl/tree/main/Dict), 29 manually curated subtitle-review terms and spelling variants, and two standalone repeated-sound hints. The `pre` and `post` stages start empty. `dictionary.example.json` demonstrates the schema with disabled fictional entries; copy and edit individual examples, then set `enabled` to `true` to use them.
 
 ## Included GalTransl terms
 
@@ -27,6 +27,10 @@ For a separate empty dictionary, use:
 
 Rules with IDs starting with `review-ja-` were curated from local subtitle review. They cover beverage names, household/recovery items, audio-work terminology, and adult-product vocabulary, including kana variants. These are glossary hints with English context notes; no source-text or post-translation replacements were added.
 
+`review-ja-025` through `review-ja-028` add the back of the earlobe, the tongue tip, lifting the hips, and a hug from behind. They preserve anatomical position and action scope through model hints. Matching entries alone are retranslated.
+
+`review-ja-029` supplies the meaning of `おねだり` as begging or asking for something, retaining the request's participants instead of changing it into waiting.
+
 The Joyful Medley tea-latte name was checked against the [Starbucks Japan product page](https://menu.starbucks.co.jp/4524785348004). Its Chinese rendering retains the product name in English. Ambiguous personal names, apparent ASR hallucinations, and whole-sentence errors were left for separate review. Local evidence and a pre-update dictionary backup are kept in ignored `.cache/` directories.
 
 ## Three stages
@@ -48,12 +52,29 @@ Common fields:
 | `language` | `any` (default), `zh`, `ja`, `en`, or `ko`; matches the recognized language |
 | `source` | Required nonempty match string; for post-rules this matches translated text |
 | `target` | Required nonempty replacement or preferred translation |
-| `match` | `exact` or `contains`; pre/post default to `exact`, glossary defaults to `contains` |
+| `match` | `exact` or `contains`; pre/post default to `exact`, glossary defaults to `contains`. Japanese glossary rules also support `sound`. |
 | `note` | Optional glossary context, on one line |
 
 With `exact`, the entire text must match. With `contains`, pre/post rules replace literal occurrences within the text. A glossary entry is included only for subtitle entries whose translation input matches it. Conflicting preferred translations for the same matched term are rejected.
 
 Glossary matching checks longer terms first and suppresses shorter terms inside their matched spans. For example, a sentence containing only `ハイエルフ` uses its preferred translation without also adding `エルフ`. If `エルフ` also occurs separately in that sentence, both terms are included. Pre/post replacements continue to run in file order.
+
+### Standalone repeated sounds
+
+`match: "sound"` is available only in `glossary` rules with `language: "ja"`. Its `source` is one kana sound unit (1–8 characters). The entire subtitle must consist of at least two repetitions of that unit, with optional punctuation and a brief vocal prefix. Matching folds katakana and half-width spelling and ignores elongation marks; small `っ` remains distinct. The glossary sent to the model uses the sound unit's spelling from the current input. Single occurrences and ordinary sentences containing the word do not match.
+
+```json
+{
+  "id": "sample-sound",
+  "language": "ja",
+  "source": "とん",
+  "target": "咚",
+  "match": "sound",
+  "note": "Repeated tapping sound; keep the translation brief."
+}
+```
+
+This matches `とんとん` and `トーン、トーン`, while leaving `とん` and `とんとんと聞こえた` unchanged. The included `review-sound-001` and `review-sound-002` entries provide a brief rubbing-sound hint for standalone repetitions of `しこ` and the geminated ASR variant `しっこ`. They supply model hints rather than forced replacements. Disable either entry with `enabled: false`. Adding these hints refreshes only matching translations.
 
 ## Generate candidate terms
 

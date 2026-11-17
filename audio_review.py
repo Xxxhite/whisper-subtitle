@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import unicodedata
 
-REVIEW_VERSION = 2
+REVIEW_VERSION = 4
 GAP_REVIEW_VERSION = 1
 
 
@@ -81,6 +81,23 @@ def is_intro_candidate(segment: dict, segments: list[dict]) -> bool:
             and any(segment["end"] < row["start"] < 180 and re.search(r"\u3053\u3093\u3070\u3093\u306f|\u3053\u3093\u306b\u3061\u306f|\u304a\u306f\u3088\u3046", row["text"]) for row in segments))
 
 
+def closing_phrase(text: str) -> bool:
+    key = ''.join(c for c in unicodedata.normalize('NFKC', text) if c.isalnum())
+    return bool(re.fullmatch(r'(?:ご)?視(?:聴)?(?:ありがとう(?:ございました|ございます)?|感謝)?|おやすみ(?:なさい)?', key))
+
+
+def weak_closing(segment: dict, cache: dict, speech: float) -> bool:
+    originals = cache.get('refinement', {}).get('originals', {})
+    details = segment.get('refinement', {})
+    initial = originals.get(str(details.get('parent_id', segment['id'])), segment)
+    probabilities = [w['probability'] for w in initial.get('words', []) if 'probability' in w]
+    strong = (initial.get('avg_logprob', -2) > -.45 and initial.get('no_speech_prob', 1) < .3
+              and probabilities and sum(probabilities) / len(probabilities) >= .75)
+    weak = (initial.get('no_speech_prob', 0) >= .6 or initial.get('avg_logprob', 0) < -1.2
+            or segment.get('audio_review', {}).get('speech_seconds', 1) < .1)
+    return not strong and speech < .25 and (weak or speech < .08)
+
+
 class ReviewRecognizer:
     def __init__(self, config: dict, *, alternate: bool = False):
         self.config = config
@@ -131,12 +148,12 @@ class ReviewRecognizer:
                     words.append(word.word)
         return "".join(words).strip()
 
-    def timed(self, audio, language: str) -> list[dict]:
+    def timed(self, audio, language: str, *, context: str = '') -> list[dict]:
         from transcript_refinement import recognition_fields
         self._load_model()
         iterator, _ = self.model.transcribe(audio, language=language, beam_size=5, best_of=1,
                                           temperature=0.0, condition_on_previous_text=False,
-                                          vad_filter=False, word_timestamps=True)
+                                          vad_filter=False, word_timestamps=True, initial_prompt=context or None)
         return [{"start": row.start, "end": row.end, "text": row.text.strip(), **recognition_fields(row)}
                 for row in iterator]
 
@@ -201,8 +218,10 @@ def review_gaps(source: Path, cache: dict, cache_path: Path, config: dict) -> li
             start, end = previous["windows"][index]
             print(f"Checking transcript gap {index + 1}/{len(previous['windows'])} ({main.console_time(start)})...", flush=True)
             for row in recognizer.timed(decode_window(source, start, end), cache["language"]):
+                from source_checks import artifact
                 left, right = max(start, start + row["start"]), min(end, start + row["end"])
                 if (right <= left or row["avg_logprob"] < -1 or row["no_speech_prob"] >= .6
+                        or artifact(row['text']) or row.get('compression_ratio', 0) > 2.4
                         or not lexical_speech(row["text"])
                         or any(min(right, old["end"]) - max(left, old["start"]) > .1 for old in cache["segments"])):
                     continue
@@ -230,20 +249,30 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
     from subtitle_processing import contains_emoji, is_pure_emoji
     from sakura import is_untranslated_japanese
     from dictionary_rules import source_text
+    from source_review import review_sources
+
+    safety_changes = review_sources(source, cache, cache_path, config)
 
     candidates = []
     for segment in cache["segments"]:
         if is_pure_emoji(segment["text"]):
             continue
         previous = segment.get("audio_review", {})
+        if previous.get('status') == 'omitted':
+            continue
         requested = segment.get("needs_audio_review", False)
-        if previous.get("version") == REVIEW_VERSION and not requested:
+        closing = closing_phrase(segment['text']) or closing_phrase(segment.get('original_asr', {}).get('text', ''))
+        if closing and previous.get('version') == REVIEW_VERSION and previous.get('closing_checked') and not requested:
+            continue
+        if previous.get("version", 0) >= 2 and not requested and not closing:
             if previous.get("context_checked") or not context_candidate(segment, cache["segments"]):
                 continue
-        if previous.get("attempts", 0) >= 2:
+        if previous.get("attempts", 0) >= 2 and not (closing and previous.get('version', 0) < REVIEW_VERSION):
             continue
         reason = None
-        if contains_emoji(segment["text"]) or contains_emoji(segment.get("zh", "")):
+        if closing:
+            reason = 'closing_phrase'
+        elif contains_emoji(segment["text"]) or contains_emoji(segment.get("zh", "")):
             reason = "mixed_emoji"
         elif requested or is_untranslated_japanese(source_text(segment), segment.get("model_zh", segment.get("zh", ""))):
             reason = "untranslated_japanese"
@@ -258,7 +287,7 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
         if reason:
             candidates.append((segment, reason))
     if not candidates:
-        return []
+        return safety_changes
     backup = cache_path.with_name("task.before-audio-review.json")
     if not backup.exists():
         main.save_json(backup, cache)
@@ -272,12 +301,18 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
             audio = decode_window(source, clip_start, segment["end"] + padding)
             first = max(0, round((segment["start"] - clip_start) * 16000))
             last = min(len(audio), round((segment["end"] - clip_start) * 16000))
-            speech = speech_seconds(audio[first:last], threshold=.5) if reason == "isolated_short" else speech_seconds(audio[first:last])
+            speech = speech_seconds(audio[first:last], threshold=.5) if reason in {'isolated_short', 'closing_phrase'} else speech_seconds(audio[first:last])
             review = {"version": REVIEW_VERSION, "attempts": segment.get("audio_review", {}).get("attempts", 0) + 1,
                       "reason": reason, "speech_seconds": round(speech, 3)}
             segment.setdefault("original_asr", {key: segment[key] for key in ("text", "start", "end")})
             segment.pop("needs_audio_review", None)
-            if reason == "isolated_short" and speech >= .1:
+            if reason == 'closing_phrase':
+                review['closing_checked'] = True
+                review['recognized_text'] = segment['text']
+                review['status'] = 'omitted' if weak_closing(segment, cache, speech) else 'reviewed'
+                if review['status'] == 'omitted':
+                    review['note'] = 'Closing phrase lacked acoustic speech evidence and reliable original recognition.'
+            elif reason == "isolated_short" and speech >= .1:
                 review["status"] = "reviewed"
                 review["recognized_text"] = segment["text"]
             elif speech < .1 and reason in {"suspect_intro", "mixed_emoji"}:
@@ -290,7 +325,11 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
                 else:
                     text = recognizer.transcribe(audio, cache["language"])
                 review["recognized_text"] = text
-                if reason == "isolated_short" and speech < .1 and not lexical_speech(text):
+                if closing_phrase(text) and weak_closing(segment, cache, speech):
+                    review['status'] = 'omitted'
+                    review['closing_checked'] = True
+                    review['note'] = 'Local re-listening produced a closing phrase without acoustic speech evidence.'
+                elif reason == "isolated_short" and speech < .1 and not lexical_speech(text):
                     review["status"] = "omitted"
                     review["note"] = "No speech evidence; local window recognition found no lexical dialogue."
                 elif text and not contains_emoji(text):
@@ -319,4 +358,4 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
             main.save_json(cache_path, cache)
     finally:
         recognizer.model = None
-    return changes
+    return safety_changes + changes

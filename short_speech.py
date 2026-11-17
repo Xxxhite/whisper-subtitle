@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import unicodedata
 
-VERSION = 1
+VERSION = 2
 
 
 def alternate_available(config: dict) -> bool:
@@ -57,6 +57,21 @@ def plan_candidates(segments: list[dict], speech: list[dict]) -> list[dict]:
                 windows.append(window)
         candidates.extend(windows)
     for row in rows:
+        # A weak lexical token inside an otherwise protected long parent may conceal a quiet phrase.
+        if (row.get('refinement', {}).get('source_protected') and lexical_speech(row['text'])
+                and ''.join(w['word'] for w in row.get('words', [])) == row['text']):
+            windows = []
+            for index, word in enumerate(row.get('words', [])):
+                if not compact(word['word']) or word.get('probability', 1) >= .2:
+                    continue
+                left, right = max(row['start'], word['start'] - 1.5), min(row['end'], word['end'] + 1.5)
+                if not .8 <= right - left <= 5:
+                    continue
+                if windows and left < windows[-1]['right']:
+                    continue
+                windows.append({'kind': 'internal', 'id': row['id'], 'source': row['text'], 'word_index': index,
+                                'left': left, 'right': right, 'focus': [left, right]})
+            candidates.extend(windows)
         if (row.get('refinement') or not lexical_speech(row['text']) or not .3 <= row['end'] - row['start'] <= 4
                 or not 4 <= len(compact(row['text'])) <= 32):
             continue
@@ -97,20 +112,60 @@ def hypothesis(items: list[dict], window: dict) -> dict | None:
 
 
 def confirmed(primary: dict | None, alternate: dict | None, window: dict) -> bool:
-    from audio_review import lexical_speech
+    from audio_review import closing_phrase, lexical_speech
     if not primary or not alternate or phonetic_key(primary['text']) != phonetic_key(alternate['text']):
         return False
     key = phonetic_key(alternate['text'])
     if not key:
         return False
+    if window['kind'] == 'internal':
+        from sakura import rhythmic_input
+        if not 2 <= len(key) <= 12 or not lexical_speech(alternate['text']) or closing_phrase(alternate['text']) or rhythmic_input(alternate['text']):
+            return False
+        source = phonetic_key(window['source'])
+        # Avoid inserting recognized fragments of words already in the retained sentence.
+        if SequenceMatcher(None, source, key, autojunk=False).find_longest_match().size >= 2:
+            return False
+        return (min(primary['end'], alternate['end']) - max(primary['start'], alternate['start']) >= .12
+                and all(h['avg_logprob'] >= -.8 and h['no_speech_prob'] < .3
+                        and sum(w.get('probability', 0) for w in h['words']) / len(h['words']) >= .65
+                        and window['left'] <= h['start'] < h['end'] <= window['right'] for h in (primary, alternate)))
     if window['kind'] == 'existing':
         return SequenceMatcher(None, phonetic_key(window['source']), key, autojunk=False).ratio() >= .5
+    if closing_phrase(alternate['text']):
+        return (window['speech'][1] - window['speech'][0] >= .5
+                and all(h.get('no_speech_prob', 1) < .3 and h.get('avg_logprob', -2) > -.7 for h in (primary, alternate)))
     meaningful = lexical_speech(alternate['text']) or key in {'うん', 'はい', 'ううん', 'あれ', 'へえ'}
     meaningful |= key == 'ん' and all(any(c in h['text'] for c in '?？') for h in (primary, alternate))
     if not meaningful:
         return False
     left, right = window['speech']
     return all(min(h['end'], right) - max(h['start'], left) >= .08 for h in (primary, alternate))
+
+
+def supplement(row: dict, recognized: dict, window: dict) -> bool:
+    """Insert an independently confirmed phrase; retain every original source word."""
+    from transcript_refinement import _clear_translation, compact
+    index = window['word_index']
+    original = row['words']
+    if any(compact(w['word']) and w.get('probability', 0) >= .65 and w['end'] - w['start'] <= 1.2
+           and min(w['end'], recognized['end']) - max(w['start'], recognized['start']) >= .12 for w in original):
+        # A differently spelled reading of an already aligned word is not missing dialogue.
+        return False
+    row.setdefault('original_asr', {k: row[k] for k in ('text', 'start', 'end')})
+    added = [{**w} for w in recognized['words']]
+    left = [{**w, 'end': min(w['end'], added[0]['start'])} for w in original[:index]]
+    right = [{**w, 'start': max(w['start'], added[-1]['end']), 'end': max(w['end'], added[-1]['end'])} for w in original[index:]]
+    # Punctuation may span a long silence in the original alignment.
+    for w in left:
+        w['start'] = min(w['start'], w['end'])
+    row['words'] = left + added + right
+    offset = sum(len(w['word']) for w in original[:index])
+    row['text'] = row['text'][:offset] + recognized['text'] + '…' + row['text'][offset:]
+    # Keep aligned text in sync with the inserted separator.
+    row['words'][len(left) + len(added) - 1]['word'] += '…'
+    _clear_translation(row)
+    return True
 
 
 def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dict) -> list[int]:
@@ -132,9 +187,14 @@ def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dic
             duration = container.duration / av.time_base if container.duration else max(r['end'] for r in cache['segments'])
         speech = get_speech_timestamps(decode_window(source, 0, duration), threshold=.35,
                                       min_speech_duration_ms=100, min_silence_duration_ms=100, speech_pad_ms=0)
-        state = {'version': VERSION, 'candidates': plan_candidates(cache['segments'], speech),
-                 'passes': {}, 'applied': 0, 'added_ids': [], 'changed_ids': [], 'complete': False}
-        backup = cache_path.with_name('task.before-short-review.json')
+        previous = state
+        candidates = plan_candidates(cache['segments'], speech)
+        if previous.get('version') == 1 and previous.get('complete'):
+            candidates = [w for w in candidates if w['kind'] == 'internal']
+        state = {'version': VERSION, 'candidates': candidates,
+                 'passes': {}, 'applied': 0, 'added_ids': previous.get('added_ids', []),
+                 'changed_ids': previous.get('changed_ids', []), 'complete': False}
+        backup = cache_path.with_name(f'task.before-short-review-v{VERSION}.json' if previous else 'task.before-short-review.json')
         if not backup.exists():
             main.save_json(backup, cache)
         cache['short_speech'] = state
@@ -176,6 +236,13 @@ def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dic
                     cache['segments'].append(row)
                     cache['segments'].sort(key=lambda r: (r['start'], r['end'], r['id']))
                     state['added_ids'].append(identifier)
+        elif window['kind'] == 'internal':
+            row = next((r for r in cache['segments'] if r['id'] == window['id']), None)
+            if row and row['text'] == window['source']:
+                if accepted and supplement(row, b, window):
+                    evidence.update(status='supplemented', inserted=b['text'], kind='internal')
+                    state['changed_ids'].append(row['id'])
+                row['short_review'] = evidence
         else:
             row = next((r for r in cache['segments'] if r['id'] == window['id']), None)
             if row and row['text'] == window['source']:

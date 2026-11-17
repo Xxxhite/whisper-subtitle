@@ -19,6 +19,17 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
     from opencc import OpenCC
     converter = OpenCC("t2s")
     for row in cache["segments"]:
+        from source_checks import artifact, implausible_duplicate
+        issue = artifact(row['text'])
+        if issue:
+            add(row, 'source_' + issue, 'Malformed or nonlexical source text requires audio confirmation; excluded from final subtitles.', 'info')
+        safety = row.get('source_review', {})
+        if safety.get('status') == 'recovered':
+            add(row, 'source_recovered', 'Acoustic source verification recovered or corrected this entry; original ASR is retained.', 'info')
+        elif safety.get('status') == 'unresolved':
+            add(row, 'source_verification_uncertain', 'Contextual spelling or audio checks did not provide sufficient agreement; inspect the retained source.')
+        if implausible_duplicate(row, cache['segments']):
+            add(row, 'implausible_source_duplicate', 'A long repeated source sentence occupies an unusually short time interval.')
         if is_pure_emoji(row["text"]):
             add(row, "filtered_emoji", "Pure emoji recognition result excluded from Chinese subtitles.", "info")
             continue
@@ -35,6 +46,8 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, 'short_speech_recovered', 'Quiet gap speech was confirmed by two local models.', 'info')
         elif short.get('status') == 'revised':
             add(row, 'short_speech_revised', 'Two local models agreed on a replacement for a similar-sounding short line; review the wording.')
+        elif short.get('status') == 'supplemented':
+            add(row, 'internal_speech_recovered', 'Two local models confirmed a missing phrase near a weak aligned word; original wording was retained.', 'info')
         elif short.get('status') == 'uncertain':
             add(row, 'short_speech_uncertain', 'Short-line review lacked reliable two-model agreement; existing wording was retained.', 'info')
         if row.get("gap_review"):
@@ -43,6 +56,8 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
                 add(row, "low_confidence_recovery", "Recovered wording has low recognition confidence; review homophones and context.")
         from transcript_refinement import low_confidence
         refinement = row.get('refinement', {})
+        if refinement.get('source_protected') and refinement.get('part', 1) == 1 and short.get('status') != 'supplemented':
+            add(row, 'protected_source', 'Reliable initial wording was preserved; only word-based subtitle splitting was applied.', 'info')
         if low_confidence(row):
             add(row, 'low_confidence_asr', 'Recognition scores suggest uncertain wording; review this audio region.')
         if refinement.get('status') == 'uncertain':
@@ -56,6 +71,9 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
         if not target:
             add(row, "missing_translation", "No completed Chinese translation.")
             continue
+        from translation_checks import meaning_errors
+        for meaning in meaning_errors(source_text(row), target):
+            add(row, 'translation_' + meaning, 'A source-conditioned check found a changed relationship or clause type.')
         if any(row.get("rule_matches", {}).values()):
             add(row, "dictionary_rules_applied", "See rule_ids for the matching rules.", "info")
         if row.get("format_normalized"):

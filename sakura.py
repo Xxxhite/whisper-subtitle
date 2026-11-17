@@ -51,7 +51,18 @@ SYSTEM_PROMPT += (
     "\u6bcf\u884c\u5f85\u8bd1\u6587\u672c\u53ea\u8fd4\u56de\u5bf9\u5e94\u7684\u4e00\u884c\u8bd1\u6587\u3002"
     "\u539f\u6587\u65e0\u6cd5\u786e\u5b9a\u7684\u4e3b\u8bed\u4fdd\u6301\u7701\u7565\uff0c\u4e0d\u8981\u51ed\u7a7a\u6dfb\u52a0\u7b2c\u4e00\u4eba\u79f0\u3002"
 )
-PROMPT_VERSION = 5
+PROMPT_V5_SYSTEM = SYSTEM_PROMPT
+SYSTEM_PROMPT += (
+    "\u62df\u58f0\u8bcd\u53ea\u4f5c\u7b80\u77ed\u5bf9\u5e94\u7ffb\u8bd1\uff0c\u4e0d\u89e3\u91ca\u6216\u7eed\u5199\u524d\u6587\u3002"
+)
+PROMPT_V6_SYSTEM = SYSTEM_PROMPT
+SYSTEM_PROMPT += (
+    "\u4fdd\u7559\u6bd4\u55bb\u4e2d\u7684\u6307\u4ee3\u5bf9\u8c61\uff0c\u533a\u5206\u5ba2\u4eba\u548c\u8bf4\u8bdd\u8005\u3002"
+    "\u5c40\u90e8\u8eab\u4f53\u52a8\u4f5c\u4e0d\u6269\u5927\u4e3a\u8d77\u8eab\u6216\u7ad9\u7acb\uff1b"
+    "\u539f\u6587\u7701\u7565\u8eab\u4f53\u6240\u5c5e\u4eba\u79f0\u65f6\u4fdd\u7559\u7701\u7565\u3002"
+    "\u4fdd\u6301\u9648\u8ff0\u548c\u95ee\u53e5\u7684\u533a\u522b\uff0c\u4f7f\u5f79\u53e5\u6309\u4e2d\u6587\u4e60\u60ef\u8868\u8fbe\u3002"
+)
+PROMPT_VERSION = 7
 SOURCE_CONTEXT_PREFIX = "\u539f\u6587\u4e0a\u4e0b\u6587\uff08\u4ec5\u4f9b\u53c2\u8003\uff09\uff1a\n"
 _PROMPT_MARKERS = (
     "Glossary (source -> translation # notes; may be empty):",
@@ -59,7 +70,7 @@ _PROMPT_MARKERS = (
     "translate the following Japanese text into Simplified Chinese",
     "Reference translations (context only):", "Glossary entries (context only):",
     "<|im_start|>", "<|im_end|>",
-    SYSTEM_PROMPT, PROMPT_V4_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V2_SYSTEM, LEGACY_SYSTEM_PROMPT, INPUT_PREFIX.strip(),
+    SYSTEM_PROMPT, PROMPT_V6_SYSTEM, PROMPT_V5_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V2_SYSTEM, LEGACY_SYSTEM_PROMPT, INPUT_PREFIX.strip(),
     SOURCE_CONTEXT_PREFIX.strip(),
     "<reference_source>", "</reference_source>",
     "<reference_translations>", "</reference_translations>",
@@ -127,10 +138,18 @@ def validate_translations(lines: list[str], translations: list[str], *,
         raise ContextLeakError("Sakura repeated translation instructions; the response was rejected.")
     pairs = zip(lines, translations) if len(lines) == len(translations) else [("\n".join(lines), "\n".join(translations))]
     for source, translated in pairs:
+        from source_checks import artifact
+        from translation_checks import meaning_errors
+        if meaning_errors(source, translated):
+            raise ContextLeakError('Sakura changed a source relationship or clause type; the response was rejected.')
         if contains_emoji(translated) and not contains_emoji(source):
             raise SakuraError("Sakura introduced emoji into the translation; the response was rejected.")
         if has_excessive_expansion(translated, source):
             raise ContextLeakError("Sakura expanded a short subtitle excessively; the response was rejected.")
+        if artifact(translated):
+            raise ContextLeakError('Sakura returned malformed or nonlexical text; the response was rejected.')
+        if rhythmic_input(source) and re.fullmatch(r'[0-9零〇一二三四五六七八九十百千万]+', _compact(translated)):
+            raise ContextLeakError('Sakura replaced sound effects with unrelated counting; the response was rejected.')
         if has_unexpected_repetition(translated, source):
             raise ContextLeakError("Sakura repeated a long phrase absent from the source; the response was rejected.")
         if has_history_leak(translated, source, history, source_context):
@@ -138,7 +157,31 @@ def validate_translations(lines: list[str], translations: list[str], *,
 
 
 def has_excessive_expansion(text: str, source: str) -> bool:
-    return len(_compact(text)) > max(64, 3 * len(_compact(source)))
+    limit = max(16, 2 * len(_compact(source))) if rhythmic_input(source) else max(32, 3 * len(_compact(source)))
+    return len(_compact(text)) > limit
+
+
+def rhythmic_input(text: str) -> bool:
+    from subtitle_processing import sound_key, repeated_kana
+    if sound_key(text) is not None or repeated_kana(text) is not None:
+        return True
+    key = _compact(text)
+    key = ''.join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in key).replace('ー', '')
+    return bool(re.fullmatch(r'[あいうえおん]{0,2}([ぁ-ゖ]{1,5}?)\1+', key))
+
+
+def separate_sound_units(text: str) -> str:
+    """Clarify repeated kana boundaries in the request without changing cached ASR."""
+    if not rhythmic_input(text):
+        return text
+    from subtitle_processing import repeated_kana
+    if any(unicodedata.category(c).startswith('P') for c in text):
+        return text
+    repeated = repeated_kana(text)
+    if repeated is None:
+        return text
+    prefix, unit, count = repeated
+    return '、'.join(([prefix] if prefix else []) + [unit] * count)
 
 
 def _repeated_phrase(text: str, width: int) -> bool:
@@ -271,6 +314,27 @@ class SakuraServer:
         sounds = [translate_vocalization(line) for line in lines]
         if lines and all(sound is not None for sound in sounds) and not glossary.strip():
             return sounds
+        isolated = [rhythmic_input(line) for line in lines]
+        if len(lines) > 1 and any(isolated):
+            result, index = [], 0
+            while index < len(lines):
+                end = index + 1
+                if not isolated[index]:
+                    while end < len(lines) and not isolated[end]:
+                        end += 1
+                translated = self.translate(lines[index:end], [] if isolated[index] else history, glossary,
+                                            attempt=attempt, source_context='' if isolated[index] else source_context)
+                if len(translated) != end - index:
+                    translated = [' '.join(self.translate([line], [], glossary, attempt=max(1, attempt), source_context=''))
+                                  for line in lines[index:end]]
+                result.extend(translated)
+                index = end
+            return result
+        if any(isolated):
+            history, source_context = [], ''
+            from subtitle_processing import kana_unit_key
+            glossary = '\n'.join(entry for entry in glossary.splitlines()
+                                 if '->' in entry and kana_unit_key(entry.split('->', 1)[0].strip()) in kana_unit_key(lines[0]))
         active_source = source_context.strip()[-600:] if attempt == 0 else ""
         active_history = history if attempt == 0 and len(lines) > 1 else []
         try:
@@ -301,7 +365,7 @@ class SakuraServer:
         user = ""
         if glossary.strip():
             user += "\u672f\u8bed\u8868\uff1a\n" + glossary.strip() + "\n\n"
-        user += INPUT_PREFIX + "\n".join(lines)
+        user += INPUT_PREFIX + "\n".join(separate_sound_units(line) for line in lines)
         body = {
             "model": "sakura", "stream": False, "temperature": 0.3 if attempt == 0 and len(lines) > 1 else 0.0, "top_p": 0.8,
             "max_tokens": min(2048, self.options["context_size"] // 2,

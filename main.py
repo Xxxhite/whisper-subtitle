@@ -680,13 +680,15 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
     if options["backend"] == "local":
         signature_data = {"backend": "local", "language": "zh", "conversion": "opencc-t2s"}
     if options["backend"] == "sakura":
-        from sakura import LEGACY_SYSTEM_PROMPT, PROMPT_V2_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_VERSION, SYSTEM_PROMPT as SAKURA_PROMPT, is_invalid_translation
+        from sakura import LEGACY_SYSTEM_PROMPT, PROMPT_V2_SYSTEM, PROMPT_V3_SYSTEM, PROMPT_V4_SYSTEM, PROMPT_V5_SYSTEM, PROMPT_V6_SYSTEM, PROMPT_VERSION, SYSTEM_PROMPT as SAKURA_PROMPT, is_invalid_translation
         from audio_review import preceding_context
         signature_data = {"backend": "sakura", "language": cache["language"], "settings": config["sakura"], "prompt": SAKURA_PROMPT, "prompt_version": PROMPT_VERSION}
         legacy_signature = fingerprint({key: value for key, value in {**signature_data, "prompt": LEGACY_SYSTEM_PROMPT}.items() if key != "prompt_version"})
         accepted = {legacy_signature, fingerprint(signature_data)}
         accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V3_SYSTEM, "prompt_version": 3}))
         accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V4_SYSTEM, "prompt_version": 4}))
+        accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V5_SYSTEM, "prompt_version": 5}))
+        accepted.add(fingerprint({**signature_data, "prompt": PROMPT_V6_SYSTEM, "prompt_version": 6}))
         for prompt in (PROMPT_V2_SYSTEM, PROMPT_V2_SYSTEM.replace("Translate short utterances as given, without prepending earlier dialogue. ", "")):
             accepted.add(fingerprint({**signature_data, "prompt": prompt, "prompt_version": 2}))
         if not retranslate and cache.get("translation_signature") in accepted:
@@ -725,6 +727,19 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
     except DictionaryError as exc:
         raise AppError(str(exc)) from exc
     config["_rulebook"] = book
+    if options['backend'] == 'api':
+        from source_checks import artifact
+        from translation_checks import meaning_errors
+        rejected = [s for s in segments if s.get('zh') and
+                    (artifact(s['zh']) or meaning_errors(source_text(s), s['zh']))]
+        if rejected:
+            backup = cache_path.with_name('task.before-translation-review-v1.json')
+            if not backup.exists():
+                save_json(backup, cache)
+            for segment in rejected:
+                segment.pop('zh', None)
+                segment.pop('model_zh', None)
+            print(f"Translation checks: refreshing {len(rejected)} affected entries.", flush=True)
     save_json(cache_path, cache)
     if refreshed:
         print(f"Dictionary input changes: refreshing {refreshed} affected entries.", flush=True)
@@ -790,6 +805,10 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
                 for segment in pending:
                     if segment["id"] in translated:
                         if contains_emoji(translated[segment["id"]]) and not contains_emoji(source_text(segment)):
+                            continue
+                        from source_checks import artifact
+                        from translation_checks import meaning_errors
+                        if artifact(translated[segment['id']]) or meaning_errors(source_text(segment), translated[segment['id']]):
                             continue
                         if is_untranslated_japanese(source_text(segment), translated[segment["id"]]):
                             segment["needs_audio_review"] = True

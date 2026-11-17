@@ -7,7 +7,7 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 SCORES = ('avg_logprob', 'no_speech_prob', 'compression_ratio')
 
 
@@ -41,6 +41,68 @@ def low_confidence(row: dict) -> bool:
     return (row.get('avg_logprob', 0) < -.8 or row.get('no_speech_prob', 0) >= .6
             or row.get('compression_ratio', 0) > 2.4
             or len(probabilities) >= 3 and sum(probabilities) / len(probabilities) < .45)
+
+
+def reliable_alignment(row: dict) -> bool:
+    words = row.get('words', [])
+    return (bool(words) and 'avg_logprob' in row and not low_confidence(row)
+            and compact(''.join(w['word'] for w in words)) == compact(row['text']))
+
+
+def _migrate(cache: dict, path: Path) -> None:
+    """Restore protected v1 parents before applying the new split-only policy."""
+    import main
+    state = cache.get('refinement', {})
+    if not state or state.get('version', 1) >= VERSION:
+        return
+    backup = path.with_name(f'task.before-refinement-v{VERSION}.json')
+    if not backup.exists():
+        main.save_json(backup, cache)
+    protected = {int(key) for key, row in state.get('originals', {}).items() if reliable_alignment(row)}
+    omitted = {p for row in cache['segments'] if row.get('audio_review', {}).get('status') == 'omitted'
+               for p in row.get('refinement', {}).get('parent_ids', [row.get('refinement', {}).get('parent_id', row['id'])])}
+    protected.difference_update(omitted)
+    restore = set()
+    retained = []
+    for row in cache['segments']:
+        details = row.get('refinement', {})
+        parents = details.get('parent_ids', [details.get('parent_id', row['id'])])
+        group = [r for r in cache['segments'] if set(parents).intersection(
+            r.get('refinement', {}).get('parent_ids', [r.get('refinement', {}).get('parent_id', r['id'])]))]
+        raw_group = [state['originals'][str(p)] for p in parents if str(p) in state.get('originals', {})]
+        source_changed = compact(''.join(r['text'] for r in group)) != compact(''.join(r['text'] for r in sorted(raw_group, key=lambda r: r['start'])))
+        if (details and not details.get('short_confirmed')
+                and row.get('audio_review', {}).get('status') != 'omitted' and protected.intersection(parents)
+                and not omitted.intersection(parents) and source_changed):
+            restore.update(parents)
+        else:
+            if details:
+                details['version'] = VERSION
+            retained.append(row)
+    # Joined groups may share roots; remove every old child of a restored group.
+    changed = True
+    while changed:
+        changed = False
+        remaining = []
+        for row in retained:
+            details = row.get('refinement', {})
+            parents = details.get('parent_ids', [details.get('parent_id', row['id'])])
+            if details and restore.intersection(parents):
+                restore.update(parents)
+                changed = True
+            else:
+                remaining.append(row)
+        retained = remaining
+    for identifier in sorted(restore):
+        raw = copy.deepcopy(state['originals'][str(identifier)])
+        raw.pop('refinement', None)
+        retained.append(raw)
+    cache['segments'] = sorted(retained, key=lambda r: (r['start'], r['end'], r['id']))
+    state['version'] = VERSION
+    state['restored_parent_ids'] = sorted(restore)
+    main.save_json(path, cache)
+    if restore:
+        print(f"Restored {len(restore)} reliable source entries before rebuilding subtitle splits.", flush=True)
 
 
 def added_repetitions(source: str, target: str) -> bool:
@@ -86,6 +148,18 @@ def split_words(row: dict, *, maximum: float = 12, pause: float = .9) -> list[di
         index += 1
     if begin < len(words):
         groups.append(words[begin:])
+    # A trailing elongation/punctuation token belongs to its neighboring phrase.
+    from source_checks import artifact
+    combined = []
+    for group in groups:
+        if combined and artifact(''.join(w['word'] for w in group)) == 'decoration_only':
+            combined[-1].extend(group)
+        else:
+            combined.append(group)
+    if len(combined) > 1 and artifact(''.join(w['word'] for w in combined[0])) == 'decoration_only':
+        first = combined.pop(0)
+        combined[0] = first + combined[0]
+    groups = combined
     # Attach zero-length decoder artifacts to the preceding or following group.
     merged = []
     for group in groups:
@@ -173,6 +247,7 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
     from audio_review import ReviewRecognizer, decode_window
     if config.get('quality', 'high') != 'high':
         return []
+    _migrate(cache, cache_path)
     candidates = [row for row in cache['segments'] if _candidate(row, cache['language'])
                   and row.get('refinement', {}).get('version') != VERSION
                   and (row['end'] - row['start'] > 15 or low_confidence(row) or row.get('words') and row['end'] - row['start'] > 8)]
@@ -195,7 +270,9 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
             if low_confidence(parent):
                 reasons.append('low_confidence')
             review = {'version': VERSION, 'parent_id': parent['id'], 'reasons': reasons, 'status': 'unchanged'}
-            if reasons:
+            if reasons and reliable_alignment(parent) and not low_confidence(parent):
+                review['source_protected'] = True
+            elif reasons:
                 print(f"Refining audio #{parent['id']} ({main.console_time(parent['start'])}; {', '.join(reasons)})...", flush=True)
                 following = sorted((r for r in cache['segments'] if r['id'] != parent['id'] and r['start'] >= parent['end']), key=lambda r: r['start'])
                 neighbor = following[0] if following else None
@@ -208,13 +285,39 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                 left, right = max(before, focus['start'] - .3, 0), min(after, focus['end'] + .3)
                 recognized = recognizer.timed(decode_window(source, left, right), cache['language'])
                 replacement = _reviewed(focus, recognized, left)
-                if replacement is None and main.asr_settings(config)['model'] == 'large-v2':
+                changes_source = replacement and compact(replacement['text']) != compact(focus['text'])
+                if (replacement is None or changes_source) and main.asr_settings(config)['model'] == 'large-v2':
                     review['alternate_recognized'] = recognized
+                    alternative = replacement
+                    alternate_name = recognizer.model_name
+                    review['alternate_model'] = alternate_name
                     # Release the alternate model before loading the primary model.
                     recognizer.model = None
                     recognizer.alternate = False
                     recognized = recognizer.timed(decode_window(source, left, right), cache['language'])
-                    replacement = _reviewed(focus, recognized, left)
+                    primary = _reviewed(focus, recognized, left)
+                    review['primary_model'] = recognizer.model_name
+                    if alternative and changes_source:
+                        from short_speech import phonetic_key
+                        agreement = (SequenceMatcher(None, phonetic_key(alternative['text']), phonetic_key(primary['text']), autojunk=False).ratio()
+                                     if primary else 0)
+                        review['model_agreement'] = round(agreement, 3)
+                        replacement = alternative if primary and alternate_name != recognizer.model_name and agreement >= .9 else None
+                        from source_checks import reading, word_confidence
+                        from source_review import spelling_hints
+                        hints = spelling_hints(focus, cache['segments'])
+                        homophone = (primary and alternative and alternate_name and alternate_name != recognizer.model_name
+                                     and reading(primary['text']) == reading(alternative['text'])
+                                     and alternative['avg_logprob'] >= primary['avg_logprob'] + .1
+                                     and word_confidence(alternative) >= .65
+                                     and any(new in alternative['text'] for _, new in hints))
+                        if homophone:
+                            replacement = alternative
+                            review['homophone_confirmed'] = True
+                        elif primary and compact(primary['text']) == compact(focus['text']):
+                            replacement = primary
+                    else:
+                        replacement = primary if primary and compact(primary['text']) == compact(focus['text']) else None
                     recognizer.model = None
                     recognizer.alternate = True
                     review['primary_fallback'] = True
