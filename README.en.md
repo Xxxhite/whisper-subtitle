@@ -4,6 +4,8 @@
 
 A minimal command-line tool for one local audio or video file at a time. Transcribe Chinese, Japanese, English, or Korean with faster-whisper, then produce Simplified Chinese subtitles. Export Chinese LRC subtitles by default, with optional SRT and source-language subtitles.
 
+Implementation modules live in `whisper_subtitle/`; the root `main.py` launches the command. Configuration, dictionaries, models, and caches resolve from the project root. See [docs/PROJECT.md](docs/PROJECT.md) for the layout.
+
 Japanese, English, and Korean use a Chat Completions-compatible API by default. Chinese is converted to Simplified Chinese locally without a translation model. Select `--translator sakura` to use a local Japanese-to-Chinese model.
 
 See [Project layout and version control](docs/PROJECT.md) for the folder structure and local-resource rules, and [Dictionary guide](docs/DICTIONARY.md) for terminology configuration.

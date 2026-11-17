@@ -126,7 +126,7 @@ def has_prompt_echo(text: str, source: str) -> bool:
 
 def validate_translations(lines: list[str], translations: list[str], *,
                           history: list[str] = (), source_context: str = "") -> None:
-    from subtitle_processing import contains_emoji
+    from .subtitle_processing import contains_emoji
     aligned = len(lines) == len(translations)
     unchanged = [index for index, (source, target) in enumerate(zip(lines, translations))
                  if aligned and is_untranslated_japanese(source, target)]
@@ -138,8 +138,8 @@ def validate_translations(lines: list[str], translations: list[str], *,
         raise ContextLeakError("Sakura repeated translation instructions; the response was rejected.")
     pairs = zip(lines, translations) if len(lines) == len(translations) else [("\n".join(lines), "\n".join(translations))]
     for source, translated in pairs:
-        from source_checks import artifact
-        from translation_checks import meaning_errors
+        from .source_checks import artifact
+        from .translation_checks import meaning_errors
         if meaning_errors(source, translated):
             raise ContextLeakError('Sakura changed a source relationship or clause type; the response was rejected.')
         if contains_emoji(translated) and not contains_emoji(source):
@@ -162,7 +162,7 @@ def has_excessive_expansion(text: str, source: str) -> bool:
 
 
 def rhythmic_input(text: str) -> bool:
-    from subtitle_processing import sound_key, repeated_kana
+    from .subtitle_processing import sound_key, repeated_kana
     if sound_key(text) is not None or repeated_kana(text) is not None:
         return True
     key = _compact(text)
@@ -174,7 +174,7 @@ def separate_sound_units(text: str) -> str:
     """Clarify repeated kana boundaries in the request without changing cached ASR."""
     if not rhythmic_input(text):
         return text
-    from subtitle_processing import repeated_kana
+    from .subtitle_processing import repeated_kana
     if any(unicodedata.category(c).startswith('P') for c in text):
         return text
     repeated = repeated_kana(text)
@@ -332,7 +332,7 @@ class SakuraServer:
             return result
         if any(isolated):
             history, source_context = [], ''
-            from subtitle_processing import kana_unit_key
+            from .subtitle_processing import kana_unit_key
             glossary = '\n'.join(entry for entry in glossary.splitlines()
                                  if '->' in entry and kana_unit_key(entry.split('->', 1)[0].strip()) in kana_unit_key(lines[0]))
         active_source = source_context.strip()[-600:] if attempt == 0 else ""

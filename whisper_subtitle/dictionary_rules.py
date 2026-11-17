@@ -95,7 +95,7 @@ class RuleBook:
         return [rule for rule in self.rules[stage] if rule.get("language", "any") in {"any", language}]
 
     def match_glossary(self, text: str, language: str) -> list[dict]:
-        from subtitle_processing import repeated_kana, kana_unit_key
+        from .subtitle_processing import repeated_kana, kana_unit_key
         sound = repeated_kana(text) if language == 'ja' else None
         matches = []
         for rule in self._active('glossary', language):

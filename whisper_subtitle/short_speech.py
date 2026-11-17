@@ -10,7 +10,7 @@ VERSION = 2
 
 
 def alternate_available(config: dict) -> bool:
-    import main
+    from . import cli as main
     from faster_whisper.utils import download_model
     try:
         download_model('turbo', cache_dir=str(main.resolve_setting(config['download_root'])), local_files_only=True)
@@ -35,8 +35,8 @@ def dialogue_key(text: str) -> str:
 
 
 def plan_candidates(segments: list[dict], speech: list[dict]) -> list[dict]:
-    from audio_review import lexical_speech
-    from transcript_refinement import compact, low_confidence
+    from .audio_review import lexical_speech
+    from .transcript_refinement import compact, low_confidence
     rows = sorted((r for r in segments if r.get('audio_review', {}).get('status') != 'omitted'), key=lambda r: r['start'])
     candidates = []
     for before, after in zip(rows, rows[1:]):
@@ -84,9 +84,9 @@ def plan_candidates(segments: list[dict], speech: list[dict]) -> list[dict]:
 
 
 def hypothesis(items: list[dict], window: dict) -> dict | None:
-    from subtitle_processing import contains_emoji
-    from transcript_refinement import compact
-    from sakura import has_unexpected_repetition
+    from .subtitle_processing import contains_emoji
+    from .transcript_refinement import compact
+    from .sakura import has_unexpected_repetition
     words, scores = [], []
     for row in items:
         chosen = []
@@ -112,14 +112,14 @@ def hypothesis(items: list[dict], window: dict) -> dict | None:
 
 
 def confirmed(primary: dict | None, alternate: dict | None, window: dict) -> bool:
-    from audio_review import closing_phrase, lexical_speech
+    from .audio_review import closing_phrase, lexical_speech
     if not primary or not alternate or phonetic_key(primary['text']) != phonetic_key(alternate['text']):
         return False
     key = phonetic_key(alternate['text'])
     if not key:
         return False
     if window['kind'] == 'internal':
-        from sakura import rhythmic_input
+        from .sakura import rhythmic_input
         if not 2 <= len(key) <= 12 or not lexical_speech(alternate['text']) or closing_phrase(alternate['text']) or rhythmic_input(alternate['text']):
             return False
         source = phonetic_key(window['source'])
@@ -145,7 +145,7 @@ def confirmed(primary: dict | None, alternate: dict | None, window: dict) -> boo
 
 def supplement(row: dict, recognized: dict, window: dict) -> bool:
     """Insert an independently confirmed phrase; retain every original source word."""
-    from transcript_refinement import _clear_translation, compact
+    from .transcript_refinement import _clear_translation, compact
     index = window['word_index']
     original = row['words']
     if any(compact(w['word']) and w.get('probability', 0) >= .65 and w['end'] - w['start'] <= 1.2
@@ -169,9 +169,9 @@ def supplement(row: dict, recognized: dict, window: dict) -> bool:
 
 
 def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dict) -> list[int]:
-    import main
-    from audio_review import ReviewRecognizer, decode_window
-    from transcript_refinement import VERSION as REFINEMENT_VERSION, _clear_translation
+    from . import cli as main
+    from .audio_review import ReviewRecognizer, decode_window
+    from .transcript_refinement import VERSION as REFINEMENT_VERSION, _clear_translation
     if cache.get('language') != 'ja' or config.get('quality', 'high') != 'high' or main.asr_settings(config)['model'] != 'large-v2':
         return []
     state = cache.get('short_speech', {})

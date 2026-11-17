@@ -21,4 +21,4 @@ Restructuring stays within one subtitle ID. Narrative perspective follows the ev
 
 The original application's wrapper formats have been adapted to this project's `translations` array with `id` and `text`. Proofreading is a final review within the translation request. Glossary-generation instructions contribute terminology consistency; they do not add a separate API call or glossary table to subtitle output. Runtime instruction overrides and disclaimer text were not adopted as translation-quality rules.
 
-The API backend applies these guidelines only to Japanese. English and Korean retain the general translator prompt. Sakura continues to use its dedicated local-model prompt in `sakura.py`.
+The API backend applies these guidelines only to Japanese. English and Korean retain the general translator prompt. Sakura continues to use its dedicated local-model prompt in `whisper_subtitle/sakura.py`.

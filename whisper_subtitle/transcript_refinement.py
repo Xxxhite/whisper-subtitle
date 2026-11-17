@@ -51,7 +51,7 @@ def reliable_alignment(row: dict) -> bool:
 
 def _migrate(cache: dict, path: Path) -> None:
     """Restore protected v1 parents before applying the new split-only policy."""
-    import main
+    from . import cli as main
     state = cache.get('refinement', {})
     if not state or state.get('version', 1) >= VERSION:
         return
@@ -149,7 +149,7 @@ def split_words(row: dict, *, maximum: float = 12, pause: float = .9) -> list[di
     if begin < len(words):
         groups.append(words[begin:])
     # A trailing elongation/punctuation token belongs to its neighboring phrase.
-    from source_checks import artifact
+    from .source_checks import artifact
     combined = []
     for group in groups:
         if combined and artifact(''.join(w['word'] for w in group)) == 'decoration_only':
@@ -197,17 +197,17 @@ def _clear_translation(row: dict) -> None:
 
 
 def _candidate(row: dict, language: str) -> bool:
-    from audio_review import lexical_speech
-    from subtitle_processing import contains_emoji, sound_key
+    from .audio_review import lexical_speech
+    from .subtitle_processing import contains_emoji, sound_key
     if row.get('audio_review', {}).get('status') == 'omitted' or contains_emoji(row['text']):
         return False
     return (lexical_speech(row['text']) if language == 'ja' else sound_key(row['text']) is None)
 
 
 def _reviewed(parent: dict, recognized: list[dict], left: float) -> dict | None:
-    from audio_review import lexical_speech
-    from subtitle_processing import contains_emoji
-    from sakura import has_unexpected_repetition
+    from .audio_review import lexical_speech
+    from .subtitle_processing import contains_emoji
+    from .sakura import has_unexpected_repetition
     rows = [row for row in recognized if row['end'] > row['start'] and row.get('words')]
     if not rows:
         return None
@@ -243,8 +243,8 @@ def _reviewed(parent: dict, recognized: list[dict], left: float) -> dict | None:
 
 def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[int]:
     """Checkpoint each reviewed parent; keep old IDs and unaffected translations."""
-    import main
-    from audio_review import ReviewRecognizer, decode_window
+    from . import cli as main
+    from .audio_review import ReviewRecognizer, decode_window
     if config.get('quality', 'high') != 'high':
         return []
     _migrate(cache, cache_path)
@@ -298,13 +298,13 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                     primary = _reviewed(focus, recognized, left)
                     review['primary_model'] = recognizer.model_name
                     if alternative and changes_source:
-                        from short_speech import phonetic_key
+                        from .short_speech import phonetic_key
                         agreement = (SequenceMatcher(None, phonetic_key(alternative['text']), phonetic_key(primary['text']), autojunk=False).ratio()
                                      if primary else 0)
                         review['model_agreement'] = round(agreement, 3)
                         replacement = alternative if primary and alternate_name != recognizer.model_name and agreement >= .9 else None
-                        from source_checks import reading, word_confidence
-                        from source_review import spelling_hints
+                        from .source_checks import reading, word_confidence
+                        from .source_review import spelling_hints
                         hints = spelling_hints(focus, cache['segments'])
                         homophone = (primary and alternative and alternate_name and alternate_name != recognizer.model_name
                                      and reading(primary['text']) == reading(alternative['text'])

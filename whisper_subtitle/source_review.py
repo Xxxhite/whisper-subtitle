@@ -3,7 +3,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 import re
 
-from source_checks import artifact, implausible_duplicate, key, reading, word_confidence
+from .source_checks import artifact, implausible_duplicate, key, reading, word_confidence
 
 VERSION = 3
 # Vocabulary hints select acoustic checks; they never perform source replacements directly.
@@ -21,7 +21,7 @@ TERMS = (
 
 
 def spelling_hints(row: dict, rows: list[dict]) -> list[tuple[str, str]]:
-    from subtitle_processing import kana_unit_key
+    from .subtitle_processing import kana_unit_key
     context = row['text'] + '\n' + '\n'.join(r['text'] for r in rows
               if row['start'] - 120 <= r['end'] <= row['start'] and r['id'] != row['id']
               and r.get('audio_review', {}).get('status') != 'omitted')[-2400:]
@@ -37,7 +37,7 @@ def _initial(row: dict, cache: dict) -> dict:
 
 
 def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
-    from audio_review import closing_phrase
+    from .audio_review import closing_phrase
     if artifact(row['text']):
         return artifact(row['text']), []
     if implausible_duplicate(row, cache['segments']):
@@ -47,7 +47,7 @@ def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
     if cache.get('language') == 'ja':
         if re.search(r'[\uac00-\ud7a3]', row['text']):
             return 'mixed_script', []
-        from subtitle_processing import repeated_kana, sound_key
+        from .subtitle_processing import repeated_kana, sound_key
         if (row.get('refinement', {}).get('status') == 'uncertain' and row.get('avg_logprob', 0) < -1.2
                 and re.fullmatch(r'[ァ-ヺー、,。.…\s]+', row['text'])
                 and repeated_kana(row['text']) and sound_key(row['text']) is None):
@@ -91,7 +91,7 @@ def focused(items: list[dict], row: dict, left: float) -> dict | None:
 
 
 def _apply(row: dict, replacement: dict) -> None:
-    from transcript_refinement import _clear_translation
+    from .transcript_refinement import _clear_translation
     row.setdefault('original_asr', {k: row[k] for k in ('text', 'start', 'end')})
     row.update({k: v for k, v in replacement.items() if k in ('text', 'words', 'avg_logprob', 'no_speech_prob', 'compression_ratio')})
     row['words'] = [{**w, 'start': max(row['start'], w['start']), 'end': min(row['end'], w['end'])} for w in row['words']]
@@ -100,7 +100,7 @@ def _apply(row: dict, replacement: dict) -> None:
 
 def apply_spelling(row: dict, old: str, new: str) -> None:
     """Change only the acoustically confirmed spelling, preserving the surrounding source."""
-    from transcript_refinement import _clear_translation
+    from .transcript_refinement import _clear_translation
     row.setdefault('original_asr', {k: row[k] for k in ('text', 'start', 'end')})
     offset = row['text'].find(old)
     words = row.get('words', [])
@@ -126,9 +126,9 @@ def apply_spelling(row: dict, old: str, new: str) -> None:
 
 
 def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[dict]:
-    import main
-    from audio_review import ReviewRecognizer, decode_window, speech_seconds, closing_phrase, weak_closing
-    from short_speech import alternate_available
+    from . import cli as main
+    from .audio_review import ReviewRecognizer, decode_window, speech_seconds, closing_phrase, weak_closing
+    from .short_speech import alternate_available
     if cache.get('language') != 'ja' or config.get('quality', 'high') != 'high':
         return []
     selected = []

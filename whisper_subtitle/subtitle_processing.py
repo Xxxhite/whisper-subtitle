@@ -13,7 +13,7 @@ def is_pure_emoji(text: str) -> bool:
 
 
 def eligible_segments(cache: dict) -> list[dict]:
-    from source_checks import artifact
+    from .source_checks import artifact
     return [row for row in cache["segments"] if not is_pure_emoji(row["text"])
             and not artifact(row['text'])
             and row.get("audio_review", {}).get("status") != "omitted"]
@@ -40,7 +40,7 @@ def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimu
         return max(0, int(seconds * 100 + .5))
 
     limit = ticks(max((row["end"] for row in segments), default=0))
-    from source_checks import artifact
+    from .source_checks import artifact
     rows = [dict(row) for row in segments if not artifact(row['text']) and (not row.get('zh') or not artifact(row['zh']))
             and not contains_emoji(row["text"]) and not contains_emoji(row.get("zh", ""))
             and row.get("audio_review", {}).get("status") != "omitted"]

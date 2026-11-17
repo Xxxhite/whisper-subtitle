@@ -3,8 +3,8 @@ import csv
 import io
 import re
 
-from dictionary_rules import source_text
-from subtitle_processing import contains_emoji, is_pure_emoji, sound_key
+from .dictionary_rules import source_text
+from .subtitle_processing import contains_emoji, is_pure_emoji, sound_key
 
 
 def findings(cache: dict, exported: list[dict]) -> list[dict]:
@@ -19,7 +19,7 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
     from opencc import OpenCC
     converter = OpenCC("t2s")
     for row in cache["segments"]:
-        from source_checks import artifact, implausible_duplicate
+        from .source_checks import artifact, implausible_duplicate
         issue = artifact(row['text'])
         if issue:
             add(row, 'source_' + issue, 'Malformed or nonlexical source text requires audio confirmation; excluded from final subtitles.', 'info')
@@ -54,7 +54,7 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, "gap_speech_recovered", "Speech was recovered from an untranscribed gap; verify the new wording.", "info")
             if row["gap_review"].get("avg_logprob", 0) < -.5:
                 add(row, "low_confidence_recovery", "Recovered wording has low recognition confidence; review homophones and context.")
-        from transcript_refinement import low_confidence
+        from .transcript_refinement import low_confidence
         refinement = row.get('refinement', {})
         if refinement.get('source_protected') and refinement.get('part', 1) == 1 and short.get('status') != 'supplemented':
             add(row, 'protected_source', 'Reliable initial wording was preserved; only word-based subtitle splitting was applied.', 'info')
@@ -71,7 +71,7 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
         if not target:
             add(row, "missing_translation", "No completed Chinese translation.")
             continue
-        from translation_checks import meaning_errors
+        from .translation_checks import meaning_errors
         for meaning in meaning_errors(source_text(row), target):
             add(row, 'translation_' + meaning, 'A source-conditioned check found a changed relationship or clause type.')
         if any(row.get("rule_matches", {}).values()):

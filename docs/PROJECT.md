@@ -2,8 +2,11 @@
 
 ```text
 whisper-subtitle/
-  main.py                  CLI entry point and task workflow
-  *.py                     Recognition, translation, and subtitle helpers
+  main.py                  Small launcher; existing command stays available
+  whisper_subtitle/
+    __init__.py            Application package
+    cli.py                 CLI arguments, configuration, and task workflow
+    *.py                   Recognition, translation, and subtitle helpers
   requirements.txt         Python dependencies
   config.example.json      Shared configuration template
   dictionary.json          Shared, editable translation glossary
@@ -14,8 +17,10 @@ whisper-subtitle/
   runtime/README.md        Local runtime provenance
 ```
 
-Application modules stay at the project root so configuration resolution and
-imports remain stable. Run the application from the project directory:
+Implementation modules live in `whisper_subtitle/` and use package-relative
+imports. The root `main.py` forwards to `whisper_subtitle.cli`. Configuration,
+glossaries, prompts, models, runtimes, and cache paths resolve from the project
+root. Run the application from the project directory:
 
 ```powershell
 python main.py "D:\audio\sample.mp3"

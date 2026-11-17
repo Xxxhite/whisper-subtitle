@@ -36,7 +36,7 @@ def _reader():
 @lru_cache(maxsize=2048)
 def reading(text: str) -> str:
     """Use readings only for candidate comparison; source spelling stays intact."""
-    from short_speech import phonetic_key
+    from .short_speech import phonetic_key
     return phonetic_key(''.join(part['hira'] for part in _reader().convert(text)))
 
 

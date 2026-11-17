@@ -13,8 +13,8 @@ from pathlib import Path
 import time
 import uuid
 
-from dictionary_rules import DictionaryError, RuleBook, source_text
-from subtitle_processing import contains_emoji, eligible_segments, sound_key
+from .dictionary_rules import DictionaryError, RuleBook, source_text
+from .subtitle_processing import contains_emoji, eligible_segments, sound_key
 
 
 SYSTEM_PROMPT = """Extract distinctive Japanese-to-Simplified-Chinese terminology from

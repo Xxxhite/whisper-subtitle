@@ -10,7 +10,7 @@ GAP_REVIEW_VERSION = 1
 
 
 def lexical_speech(text: str) -> bool:
-    from subtitle_processing import sound_key, contains_emoji
+    from .subtitle_processing import sound_key, contains_emoji
     if contains_emoji(text) or sound_key(text) is not None:
         return False
     compact = "".join(c for c in unicodedata.normalize("NFKC", text) if c.isalnum())
@@ -109,8 +109,7 @@ class ReviewRecognizer:
         if self.model is None:
             import ctranslate2
             from faster_whisper import WhisperModel
-            import main
-
+            from . import cli as main
             main.prepare_local_runtime()
             settings = main.asr_settings(self.config)
             device = settings["device"]
@@ -149,7 +148,7 @@ class ReviewRecognizer:
         return "".join(words).strip()
 
     def timed(self, audio, language: str, *, context: str = '') -> list[dict]:
-        from transcript_refinement import recognition_fields
+        from .transcript_refinement import recognition_fields
         self._load_model()
         iterator, _ = self.model.transcribe(audio, language=language, beam_size=5, best_of=1,
                                           temperature=0.0, condition_on_previous_text=False,
@@ -189,7 +188,7 @@ def _window_starts(start: float, end: float):
 
 def review_gaps(source: Path, cache: dict, cache_path: Path, config: dict) -> list[dict]:
     """Recover lexical speech in untranscribed gaps using audio evidence only."""
-    import main
+    from . import cli as main
     if cache.get("language") != "ja" or config.get("quality", "high") != "high":
         return []
     previous = cache.get("gap_review", {})
@@ -218,7 +217,7 @@ def review_gaps(source: Path, cache: dict, cache_path: Path, config: dict) -> li
             start, end = previous["windows"][index]
             print(f"Checking transcript gap {index + 1}/{len(previous['windows'])} ({main.console_time(start)})...", flush=True)
             for row in recognizer.timed(decode_window(source, start, end), cache["language"]):
-                from source_checks import artifact
+                from .source_checks import artifact
                 left, right = max(start, start + row["start"]), min(end, start + row["end"])
                 if (right <= left or row["avg_logprob"] < -1 or row["no_speech_prob"] >= .6
                         or artifact(row['text']) or row.get('compression_ratio', 0) > 2.4
@@ -245,11 +244,11 @@ def review_gaps(source: Path, cache: dict, cache_path: Path, config: dict) -> li
 
 
 def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> list[dict]:
-    import main
-    from subtitle_processing import contains_emoji, is_pure_emoji
-    from sakura import is_untranslated_japanese
-    from dictionary_rules import source_text
-    from source_review import review_sources
+    from . import cli as main
+    from .subtitle_processing import contains_emoji, is_pure_emoji
+    from .sakura import is_untranslated_japanese
+    from .dictionary_rules import source_text
+    from .source_review import review_sources
 
     safety_changes = review_sources(source, cache, cache_path, config)
 
