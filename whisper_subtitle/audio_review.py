@@ -1,6 +1,7 @@
 """Review a few suspect regions without re-running whole-file transcription."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import unicodedata
@@ -102,6 +103,67 @@ def weak_closing(segment: dict, cache: dict, speech: float) -> bool:
     return not strong and speech < .25 and (weak or speech < .08)
 
 
+def unsafe_replacement(original: str, candidate: str) -> bool:
+    from .sakura import has_unexpected_repetition
+    from .source_checks import artifact
+    from .subtitle_processing import contains_emoji
+
+    return bool(artifact(candidate) or contains_emoji(candidate)
+                or has_unexpected_repetition(candidate, original))
+
+
+def restore_rejected_reviews(cache: dict, path: Path) -> None:
+    """Restore legacy rows in which an accepted review replaced valid text with an artifact."""
+    from . import cli
+    from .source_checks import artifact
+    from .transcript_refinement import SCORES, _clear_translation
+
+    candidates = []
+    for row in cache['segments']:
+        previous = row.get('audio_review', {})
+        original = row.get('original_asr')
+        details = row.get('refinement', {})
+        accepted_invalid = (previous.get('status') in {'reviewed', 'context_unresolved'}
+                            and previous.get('recognized_text') == row['text'])
+        filtered_invalid = (previous.get('status') == 'omitted'
+                            and previous.get('reason') in {'extreme_repetition', 'malformed_text'}
+                            and previous['reason'] == artifact(row['text']))
+        if (original and (accepted_invalid or filtered_invalid)
+                and details.get('parts', 1) == 1 and len(details.get('parent_ids', [])) <= 1
+                and (row['start'], row['end']) == (original['start'], original['end'])
+                and lexical_speech(original['text'])
+                and not unsafe_replacement(original['text'], original['text'])
+                and unsafe_replacement(original['text'], row['text'])):
+            candidates.append(row)
+    if not candidates:
+        return
+    old_path = path.with_name('task.before-audio-review.json')
+    try:
+        old_rows = json.loads(old_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        old_rows = {}
+    old_rows = ({row['id']: row for row in old_rows['segments']}
+                if isinstance(old_rows, dict) and old_rows.get('file_hash') == cache.get('file_hash')
+                and isinstance(old_rows.get('segments'), list) else {})
+    backup = path.with_name('task.before-rejected-audio-review.json')
+    if not backup.exists():
+        cli.save_json(backup, cache)
+    for row in candidates:
+        original = row['original_asr']
+        old = old_rows.get(row['id'], {})
+        for key in (*SCORES, 'words'):
+            row.pop(key, None)
+        if all(old.get(key) == original[key] for key in ('text', 'start', 'end')):
+            row.update({key: old[key] for key in (*SCORES, 'words') if key in old})
+        row.update(original)
+        row.pop('refinement', None)
+        row.pop('source_review', None)
+        _clear_translation(row)
+        row['audio_review'].update(status='restored', context_checked=True,
+                                   note='Restored the input of an earlier review that accepted an invalid candidate.')
+    cli.save_json(path, cache)
+
+
 class ReviewRecognizer:
     def __init__(self, config: dict, *, alternate: bool = False):
         self.config = config
@@ -162,24 +224,39 @@ class ReviewRecognizer:
 
     def counting(self, audio, *, hinted: bool = True) -> list[dict]:
         """Decode a quiet count once, with a topic hint but no example sequence."""
-        import numpy as np
+        return self.short_clip(
+            normalize_review_audio(audio, peak_target=.25, max_gain=8, amplify_only=True),
+            context='カウントダウン。' if hinted else '',
+        )
+
+    def short_clip(self, audio, *, context: str = '') -> list[dict]:
+        """Decode one short Japanese window without seeking through it again."""
         from .transcript_refinement import recognition_fields
         self._load_model()
-        peak = float(np.percentile(np.abs(audio), 99.5)) if len(audio) else 0
-        if peak > .0001:
-            audio = np.clip(audio * min(8.0, max(1.0, .25 / peak)), -1, 1).astype(np.float32)
         iterator, _ = self.model.transcribe(audio, language='ja', beam_size=5, best_of=1,
                     temperature=0.0, condition_on_previous_text=False, vad_filter=False, word_timestamps=True,
                     without_timestamps=True,
                     repetition_penalty=1.15,
-                    initial_prompt='カウントダウン。' if hinted else None)
-        # A counting window is shorter than one decoder chunk. Consume it once;
+                    initial_prompt=context or None)
+        # This window is shorter than one decoder chunk. Consume it once;
         # repeated seeking through a stretched final word can otherwise stall.
         try:
             row = next(iterator, None)
             return [{'start':row.start,'end':row.end,'text':row.text.strip(),**recognition_fields(row)}] if row else []
         finally:
             iterator.close()
+
+
+def normalize_review_audio(audio, *, peak_target: float, max_gain: float, amplify_only: bool = False):
+    import numpy as np
+
+    peak = float(np.percentile(np.abs(audio), 99.5)) if len(audio) else 0
+    if peak <= .0001:
+        return audio
+    gain = min(max_gain, peak_target / peak)
+    if amplify_only:
+        gain = max(1, gain)
+    return np.clip(audio * gain, -1, 1).astype(np.float32)
 
 
 def gap_windows(segments: list[dict], speech: list[dict], duration: float) -> list[tuple[float, float]]:
@@ -274,6 +351,9 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
     from .sakura import is_untranslated_japanese
     from .dictionary_rules import source_text
     from .source_review import review_sources
+    from .transcript_refinement import _clear_translation
+
+    restore_rejected_reviews(cache, cache_path)
 
     safety_changes = review_sources(source, cache, cache_path, config)
 
@@ -356,10 +436,10 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
                 elif reason == "isolated_short" and speech < .1 and not lexical_speech(text):
                     review["status"] = "omitted"
                     review["note"] = "No speech evidence; local window recognition found no lexical dialogue."
-                elif text and not contains_emoji(text):
+                elif text and not unsafe_replacement(segment['text'], text):
                     if text != segment["text"]:
                         segment["text"] = text
-                        segment.pop("zh", None)
+                        _clear_translation(segment)
                         for key in ("words", "avg_logprob", "no_speech_prob", "compression_ratio"):
                             segment.pop(key, None)
                         if segment.get("refinement"):
@@ -373,6 +453,8 @@ def review_task(source: Path, cache: dict, cache_path: Path, config: dict) -> li
                     review["note"] = "No reliable text recovered from the corrupted region."
                 else:
                     review["status"] = "unresolved"
+                    if text:
+                        review['note'] = 'Rejected invalid or repetitive audio review text and kept the prior transcript.'
             if reason == "context_mismatch":
                 review["context_checked"] = True
                 if context_candidate(segment, cache["segments"]):

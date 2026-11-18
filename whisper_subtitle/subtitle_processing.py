@@ -104,7 +104,7 @@ def sound_key(text: str) -> str | None:
     if laugh:
         return "laugh:" + kana[-1]
     sound = re.fullmatch(r"(.{1,4})\1+", kana)
-    known = {"\u304f\u3059", "\u3051\u3089", "\u3052\u3089", "\u3071\u3061", "\u3068\u3093", "\u3053\u3093", "\u3054\u308d", "\u307a\u308d", "\u3082\u3050", "\u307d\u3093", "\u3053\u3061\u3087"}
+    known = {"くす", "けら", "げら", "ぱち", "とん", "こん", "ごろ", "ぺろ", "もぐ", "ぽん", "こちょ", "さわ", "すり"}
     return "sound:" + sound[1] if sound and sound[1] in known else None
 
 

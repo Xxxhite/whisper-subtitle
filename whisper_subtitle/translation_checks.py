@@ -16,6 +16,51 @@ def intimate_context(text: str) -> bool:
                 and re.search(r'エッチ|気持ち|舐|なめ|我慢|興奮',text))
 
 
+def climax_context(text: str) -> bool:
+    return intimate_context(text) or ('エッチ' in text and bool(re.search(r'我慢|挿入|中に[出来]|腰を', text)))
+
+
+def progressive_action_clause(source: str) -> bool:
+    return bool(re.fullmatch(r'(?:入れ|進め|動かし|深め)てい(?:って|きます|こう)[、。…\s]*', source.strip()))
+
+
+def climax_with_partner(source: str, context: str) -> bool:
+    return (climax_context(source + '\n' + context)
+            and bool(re.search(r'一緒に行こう|行って.{0,12}一緒に', source))
+            and not re.search(r'学校|会社|病院|公園|駅|旅行|作業|計画|試験|仕事|上手く|うまく', source))
+
+
+def normalize_contextual_actions(source: str, target: str, context: str) -> str:
+    """Clarify an isolated literal movement phrase when the source context fixes its meaning."""
+    if climax_with_partner(source, context):
+        motion = r'一起[去走]' if re.search(r'行って.{0,12}一緒に', source) else r'一起走'
+        target = re.sub(motion + r'(?=(?:吧|啦|吗|嘛|了)?(?:[。！？?？，、.…\s]|$))', '一起高潮', target)
+        if re.search(r'行って.{0,12}一緒に', source):
+            target = re.sub(r'[去走](?=(?:吧|啦|吗|嘛|了)?[，、,.…\s]+(?:和|跟|与)[我你]一起)', '高潮', target)
+    return target
+
+
+def explicit_question(source: str) -> bool:
+    return bool(re.search(r'[ぁ-ゖァ-ヺ]', source)
+                and re.fullmatch(r'[^。！？!?]{2,36}[?？]', source.strip()))
+
+
+def physical_fit(source: str) -> bool:
+    return bool(re.search(r'(?:舌|耳).{0,24}(?:はま|合|フィット).{0,24}相性', source))
+
+
+def relaxed_expression(source: str) -> bool:
+    return bool(re.search(r'(?:顔|表情).{0,10}(?:とろとろ|トロトロ)', source))
+
+
+def alternating_tongue_motion(source: str) -> bool:
+    return bool(re.search(r'舌.{0,10}(?:出し入れ|出たり入ったり)', source))
+
+
+def favorite_ear_action(source: str) -> bool:
+    return bool(re.search(r'(?:君|あなた|お客様|お兄さん)の(?:一番)?大?好きな耳(?:舐め|なめ|かき|掻き)', source))
+
+
 def normalize_participants(source: str, target: str) -> str:
     """Keep an omitted receiver omitted instead of inventing a participant."""
     if (re.search(r'耳.{0,14}(?:なぞられ|舐められ|なめられ|触れられ)',source)
@@ -32,14 +77,30 @@ def context_for(row: dict, rows: list[dict]) -> str:
     if following:before+='\n<following_source>\n'+following[0][:180]+'\n</following_source>'
     history='\n'.join(r['text'] for r in rows if row['start']-480<=r['end']<=row['start']
                       and r.get('audio_review',{}).get('status')!='omitted')
-    if re.search(r'行[くこきっ]|い[くこきっ]',row['text']) and intimate_context(history):
-        terms=sorted(set(re.findall(r'おちんぽ|ちんちん|おまんこ|精液|射精|エッチ|気持ち|舐|我慢|興奮',history)))
+    if re.search(r'行[くこきっ]|い[くこきっけ]',row['text']) and climax_context(history):
+        terms=sorted(set(re.findall(r'おちんぽ|ちんちん|おまんこ|精液|射精|エッチ|気持ち|舐|我慢|興奮|挿入|中に[出来]|腰を',history)))
         before+='\n<topic_terms>'+','.join(terms)+'</topic_terms>'
     return before
 
 
 def meaning_errors(source: str, target: str, context: str = '') -> list[str]:
     errors = []
+    if progressive_action_clause(source) and re.search(r'不只是|不仅|不光|除了', target):
+        errors.append('progressive_action_changed_to_added_clause')
+    if favorite_ear_action(source) and re.search(r'喜欢的耳朵(?!按摩|清洁|护理)', target):
+        errors.append('favorite_action_changed_to_body_part')
+    if (explicit_question(source) and re.search(r'[一-鿿]', target)
+            and not re.search(r'[?？]|[吗么嗎麼][。.…！!\s]*$', target)):
+        errors.append('explicit_question_lost')
+    if physical_fit(source) and re.search(r'天造地设|天生一对|命中注定|绝配的一对', target):
+        errors.append('physical_fit_expanded_to_relationship')
+    if relaxed_expression(source) and re.search(r'软绵绵|软乎乎|黏糊糊|粘糊糊', target):
+        errors.append('facial_expression_translated_as_texture')
+    if alternating_tongue_motion(source) and not re.search(r'进进出出|进出|往返|来回|反复|伸缩|进退', target):
+        inward = bool(re.search(r'伸进|伸入|深入', target))
+        outward = bool(re.search(r'伸出|抽出|收回|退出|缩回', target))
+        if inward != outward:
+            errors.append('alternating_motion_lost_direction')
     if normalize_participants(source,target)!=target:
         errors.append('unsupported_passive_participant')
     if action_sound(source) and re.search(r'我|[你您]|他|她|它',target):
@@ -66,9 +127,10 @@ def meaning_errors(source: str, target: str, context: str = '') -> list[str]:
             and not re.search(r'彼|彼女|あの人|その人|友達',source+'\n'+context)
             and re.search(r'让[他她]|[他她](?:的身子|变得|一颤)',target)):
         errors.append('listener_service_changed_to_third_person')
-    if (intimate_context(source+'\n'+context) and re.search(r'(?:一緒に行こう|いきそう|行きそう)',source)
+    if (climax_context(source+'\n'+context)
+            and re.search(r'(?:一緒に行こう|行って.{0,12}一緒に|いきそう|行きそう|いけそう)',source)
             and not re.search(r'学校|会社|病院|公園|駅|旅行|作業|計画|試験|仕事|上手く|うまく',source)
-            and re.search(r'一起去|顺利进行',target)):
+            and re.search(r'一起去|一起走|顺利进行|喘不过气|[去走](?:吧|啦)?[，、,.…\s]+(?:和|跟|与)[我你]一起',target)):
         errors.append('contextual_action_changed_to_literal_motion')
     if re.search(r'(?:お客様|あなた|君)のような', source) and re.search(r'像我(?:一样|这样|那么)', target):
         errors.append('listener_simile_changed_to_speaker')

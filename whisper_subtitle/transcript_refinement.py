@@ -50,6 +50,47 @@ def reliable_alignment(row: dict) -> bool:
             and compact(''.join(w['word'] for w in words)) == compact(row['text']))
 
 
+def trim_word_padding(cache: dict, path: Path) -> None:
+    """Keep a reliable subtitle close to its aligned words when the decoder adds long padding."""
+    from . import cli
+
+    corrections = []
+    for row in cache['segments']:
+        if row['end'] - row['start'] <= 15 or row.get('audio_review', {}).get('status') == 'omitted':
+            continue
+        words = row.get('words', [])
+        timed = [w for w in words if compact(w['word'])]
+        if len(timed) < 2 or any(w['end'] < w['start'] for w in words) or any(
+                b['start'] < a['end'] - .01 for a, b in zip(words, words[1:])):
+            continue
+        aligned = (len(timed) >= 4 and reliable_alignment(row)
+                   and timed[0].get('probability', 0) >= .55 and timed[-1].get('probability', 0) >= .55)
+        # A timestamp attached to trailing decoration can stretch a repeated voice sound.
+        stretched_vocal = (bool(re.fullmatch(r'([あいうえおん])\1{1,8}', compact(row['text'])))
+                           and compact(''.join(w['word'] for w in timed)) == compact(row['text'])
+                           and words[-1]['end'] - timed[-1]['end'] >= 10)
+        if not aligned and not stretched_vocal:
+            continue
+        start, end = words[0]['start'], (timed[-1]['end'] if stretched_vocal else words[-1]['end'])
+        if not row['start'] <= start < end <= row['end'] or end - start < .8:
+            continue
+        if max(start - row['start'], row['end'] - end) >= 3:
+            corrections.append((row, max(row['start'], start - .15), min(row['end'], end + .15)))
+    if not corrections:
+        return
+    backup = path.with_name('task.before-word-padding.json')
+    if not backup.exists():
+        cli.save_json(backup, cache)
+    for row, start, end in corrections:
+        row.setdefault('original_asr', {k: row[k] for k in ('text', 'start', 'end')})
+        row['word_padding_trimmed'] = {'start': row['start'], 'end': row['end']}
+        row.update(start=start, end=end)
+        for word in row['words']:
+            word['start'] = min(end, max(start, word['start']))
+            word['end'] = min(end, max(start, word['end']))
+    cli.save_json(path, cache)
+
+
 def _migrate(cache: dict, path: Path) -> None:
     """Restore protected v1 parents before applying the new split-only policy."""
     from . import cli as main
@@ -191,6 +232,8 @@ def original_segments(cache: dict) -> list[dict]:
     originals = cache.get('refinement', {}).get('originals', {})
     result, seen = [], set()
     for row in cache['segments']:
+        if row.get('sound_review'):
+            continue  # A confirmed gap sound is added after the original transcription.
         details = row.get('refinement', {})
         for identifier in details.get('parent_ids', [details.get('parent_id', row['id'])]):
             parent = str(identifier)
@@ -291,7 +334,121 @@ def upgrade_splits(cache: dict, path: Path, config: dict) -> list[int]:
     if config.get('quality', 'high') != 'high':
         return []
     _migrate(cache, path)
-    return resplit_cached(cache, path, protected_terms(config))
+    restore_question_marks(cache, path)
+    terms = protected_terms(config)
+    restore_disputed_refinements(cache, path, terms)
+    return resplit_cached(cache, path, terms)
+
+
+def lexical_edits(original: str, revised: str) -> set[tuple[int, int, str]]:
+    """Compare the words actually changed without counting brief vocal fillers."""
+    from .source_checks import reading
+
+    source, target = reading(original), reading(revised)
+    changes = set()
+    for kind, begin, end, left, right in SequenceMatcher(None, source, target, autojunk=False).get_opcodes():
+        if kind == 'equal':
+            continue
+        old, new = source[begin:end], target[left:right]
+        if (not old or not new) and re.fullmatch(r'[あいうえおんはふー]{1,3}', old or new):
+            continue
+        changes.add((begin, end, new))
+    return changes
+
+
+def restore_disputed_refinements(cache: dict, path: Path, terms: tuple[str, ...]) -> None:
+    """Restore archived words when the primary recognized them and only turbo disputed them."""
+    from . import cli
+    from .source_checks import reading
+
+    if cache.get('language') != 'ja':
+        return
+    originals = cache.get('refinement', {}).get('originals', {})
+    groups: dict[int, list[dict]] = {}
+    for row in cache['segments']:
+        details = row.get('refinement', {})
+        if details.get('status') == 'revised' and not details.get('parent_ids'):
+            groups.setdefault(details.get('parent_id', row['id']), []).append(row)
+    updates = {}
+    for identifier, rows in groups.items():
+        rows.sort(key=lambda row: row['start'])
+        original = originals.get(str(identifier))
+        review = rows[0]['refinement']
+        primary = review.get('recognized', [])
+        alternate = review.get('alternate_recognized', [])
+        if (not original or not original.get('words') or len(rows) != review.get('parts', 1)
+                or not primary or not alternate or not review.get('primary_model')
+                or not review.get('alternate_model') or review['primary_model'] == review['alternate_model']
+                or any(row.get('audio_review', {}).get('status') == 'omitted' for row in rows)):
+            continue
+        initial = original['text']
+        alternate_text = ''.join(item['text'] for item in alternate)
+        if (any(item.get('avg_logprob', -2) < -.8 or item.get('no_speech_prob', 1) >= .5 for item in primary)
+                or reading(''.join(item['text'] for item in primary)) != reading(initial)
+                or reading(''.join(row['text'] for row in rows)) != reading(alternate_text)
+                or not lexical_edits(initial, alternate_text)):
+            continue
+        parts = split_words(original, language='ja', terms=terms) or [original]
+        originals_by_text = {row['text']: row for row in rows}
+        updates[identifier] = (rows, parts, originals_by_text)
+    if not updates:
+        return
+    backup = path.with_name('task.before-refinement-agreement.json')
+    if not backup.exists():
+        cli.save_json(backup, cache)
+    next_id = max([r['id'] for r in cache['segments']] + [int(key) for key in originals]) + 1
+    discarded = {r['id'] for rows, _, _ in updates.values() for r in rows}
+    retained = [r for r in cache['segments'] if r['id'] not in discarded]
+    for identifier, (rows, parts, prior_by_text) in updates.items():
+        for index, part in enumerate(parts):
+            child = {**copy.deepcopy(originals[str(identifier)]), **copy.deepcopy(part)}
+            _clear_translation(child)
+            prior = prior_by_text.get(child['text'], {})
+            child.update({key: prior[key] for key in ('zh', 'model_zh', 'translation_text', 'rule_input_signature',
+                                                     'rule_matches', 'glossary_terms', 'format_normalized') if key in prior})
+            if index < len(rows):
+                child['id'] = rows[index]['id']
+            else:
+                child['id'] = next_id
+                next_id += 1
+            child.pop('original_asr', None)
+            child['refinement'] = {'version': VERSION, 'parent_id': identifier, 'status': 'unchanged',
+                                   'primary_supported_original': True, 'part': index + 1, 'parts': len(parts)}
+            retained.append(child)
+    cache['segments'] = sorted(retained, key=lambda r: (r['start'], r['end'], r['id']))
+    cli.save_json(path, cache)
+
+
+def restore_question_marks(cache: dict, path: Path) -> None:
+    """Restore a discarded explicit question when the recognized words still agree."""
+    from . import cli
+    from .short_speech import dialogue_key
+
+    if cache.get('language') != 'ja':
+        return
+    originals = cache.get('refinement', {}).get('originals', {})
+    affected = []
+    for row in cache['segments']:
+        detail = row.get('refinement', {})
+        original = originals.get(str(row['id']), {}).get('text', '')
+        if (detail.get('status') == 'revised' and detail.get('parts', 1) == 1
+                and not detail.get('parent_ids') and original.rstrip().endswith(('?', '？'))
+                and not re.search(r'[?？]', row['text'])
+                and dialogue_key(original) and dialogue_key(original) == dialogue_key(row['text'])):
+            affected.append(row)
+    if not affected:
+        return
+    backup = path.with_name('task.before-question-restoration.json')
+    if not backup.exists():
+        cli.save_json(backup, cache)
+    for row in affected:
+        row['text'] = row['text'].rstrip('。.!！… ') + '?'
+        if row.get('words'):
+            last = row['words'][-1]
+            last['word'] = last['word'].rstrip('。.!！… ') + '?'
+        row['refinement']['question_restored'] = True
+        _clear_translation(row)
+    cli.save_json(path, cache)
 
 
 def _candidate(row: dict, language: str) -> bool:
@@ -320,7 +477,8 @@ def _reviewed(parent: dict, recognized: list[dict], left: float) -> dict | None:
                 if word['end'] >= word['start']:
                     words.append(word)
     text = ''.join(word['word'] for word in words).strip()
-    if not text or contains_emoji(text) or not lexical_speech(text):
+    if (not text or contains_emoji(text) or not lexical_speech(text)
+            or len(re.findall(r'[?？]+', text)) < len(re.findall(r'[?？]+', parent['text']))):
         return None
     weights = [max(.1, row['end'] - row['start']) for row in rows]
     avg = sum(row.get('avg_logprob', -2) * weight for row, weight in zip(rows, weights)) / sum(weights)
@@ -402,7 +560,10 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                         agreement = (SequenceMatcher(None, phonetic_key(alternative['text']), phonetic_key(primary['text']), autojunk=False).ratio()
                                      if primary else 0)
                         review['model_agreement'] = round(agreement, 3)
-                        replacement = alternative if primary and alternate_name != recognizer.model_name and agreement >= .9 else None
+                        supported = (primary and (cache['language'] != 'ja'
+                                     or lexical_edits(focus['text'], alternative['text']).issubset(
+                                         lexical_edits(focus['text'], primary['text']))))
+                        replacement = alternative if supported and alternate_name != recognizer.model_name and agreement >= .9 else None
                         from .source_checks import reading, word_confidence
                         from .source_review import spelling_hints
                         hints = spelling_hints(focus, cache['segments'])
@@ -414,7 +575,7 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                         if homophone:
                             replacement = alternative
                             review['homophone_confirmed'] = True
-                        elif primary and compact(primary['text']) == compact(focus['text']):
+                        elif primary and reading(primary['text']) == reading(focus['text']):
                             replacement = primary
                     else:
                         replacement = primary if primary and compact(primary['text']) == compact(focus['text']) else None

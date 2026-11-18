@@ -7,11 +7,21 @@ import re
 from .source_checks import artifact, implausible_duplicate, key, reading, word_confidence
 
 VERSION = 5
+WORD_FINAL_NASAL_HINT = ('精神', '精子')
 # Vocabulary hints select acoustic checks; they never perform source replacements directly.
-# Each spelling change must be returned by both models, with unchanged surrounding words.
+# Each spelling change needs independent acoustic evidence and matching surrounding words.
 TERMS = (
     (('下先',), '舌先', ('耳', '舐', 'なめ'), ()),
     (('ひと先',), '舌先', ('耳', '舐', 'なめ'), ()),
+    (('人の感触',), '舌の感触', ('舌を', '舌先', '舐', 'なめ'), ()),
+    (('下を多くに',), '舌を奥に', ('浅いところ', '舐', 'なめ'), ('床', '下段')),
+    (('出汁入れ',), '出し入れ', ('舌を', '舐', 'なめ'), ('料理', '昆布', '味噌汁', '鍋')),
+    (('チラしたりしない',), 'じらしたりしない', ('我慢', 'エッチ', '気持ち', 'その分'), ('視線', 'チラ見', '覗')),
+    (('息そうになった',), 'いきそうになった', ('エッチ', '我慢', '気持ち'), ('呼吸困難', '咳', '病院')),
+    (('目奥まで',), 'ね、奥まで', ('吐いてる', '入ってる'), ('眼科', '視力', '目薬', '目の奥')),
+    (('吐いてる',), '入ってる', ('奥まで', '中まで'), ('胃', '発熱', '吐き気', '悪心')),
+    (('耳の実', '耳の目', '耳飲み'), '耳舐め', ('舐', 'なめ', '耳かき', 'エッチ'),
+     ('果物', '果実', '木の実', '植物', '妖怪', '耳鼻科', '診察')),
     (('女の口',), '序の口', ('まだ',), ()),
     (('写真', '写生', '謝罪', '処生'), '射精', ('勃起', 'ぼっき', 'おちん', 'しこしこ', 'しご', '我慢汁'), ('カメラ', '撮', '絵', '画家', '謝る', '謝罪会見', '申し訳')),
     (('幸運',), '興奮', ('息', '体', '勃起', 'ぼっき', 'エッチ'), ('宝くじ', 'くじ', '幸運を祈')),
@@ -32,7 +42,20 @@ TERMS = (
 
 def spelling_hints(row: dict, rows: list[dict]) -> list[tuple[str, str]]:
     from .context_vocabulary import vocabulary_hints
-    return vocabulary_hints(row, rows, TERMS)
+    hints = vocabulary_hints(row, rows, TERMS)
+    possessive = re.search(r'(?:君|きみ|あなた|お兄さん)の精神(?=[、。…\sを]|$)', row['text'])
+    if possessive and row['text'].count('精神') == 1:
+        neighbors = [item for item in rows if item is not row
+                     and item.get('audio_review', {}).get('status') != 'omitted']
+        before = '\n'.join(item['text'] for item in neighbors if row['start'] - 8 <= item['end'] <= row['start'])
+        after = '\n'.join(item['text'] for item in neighbors if row['end'] <= item['start'] <= row['end'] + 8)
+        before += '\n' + row['text'][:possessive.start()]
+        after = row['text'][possessive.end():] + '\n' + after
+        destination = r'[を、。…\sー]*(?:(?:私|わたし|僕|ぼく|俺)の)?(?:一番|いちばん)?(?:中|奥)に'
+        if (re.search(r'(?:中|奥)に(?:出して|だして|射精して)', before)
+                and re.match(destination + r'(?:ちょうだい|頂戴|入れて|出して|だして)', after)):
+            return ([WORD_FINAL_NASAL_HINT] + hints)[:2]
+    return hints
 
 
 def _initial(row: dict, cache: dict) -> dict:
@@ -71,7 +94,8 @@ def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
         primaries = details.get('recognized', [])
         distinct = (details.get('alternate_model') and details.get('primary_model')
                     and details['alternate_model'] != details['primary_model'])
-        if hints and distinct and details.get('parts', 1) == 1 and len(alternatives) == len(primaries) == 1:
+        if (hints and WORD_FINAL_NASAL_HINT not in hints and distinct and details.get('parts', 1) == 1
+                and len(alternatives) == len(primaries) == 1):
             alt, primary = alternatives[0], primaries[0]
             if (not artifact(alt['text']) and reading(alt['text']) == reading(primary['text'])
                     and key(alt['text']) != key(row['text']) and alt['avg_logprob'] >= primary['avg_logprob'] + .1
@@ -137,6 +161,37 @@ def apply_spelling(row: dict, old: str, new: str) -> None:
     _clear_translation(row)
 
 
+def _term_interval(hypothesis: dict, term: str) -> tuple[float, float] | None:
+    text = ''.join(word['word'] for word in hypothesis['words'])
+    start = text.find(term)
+    if start < 0 or text.count(term) != 1:
+        return None
+    cursor = 0
+    group = []
+    for word in hypothesis['words']:
+        end = cursor + len(word['word'])
+        if end > start and cursor < start + len(term):
+            group.append(word)
+        cursor = end
+    return group[0]['start'], group[-1]['end']
+
+
+def _aligned_ear_licking(expected: str, a: dict, b: dict) -> bool:
+    """Check the observed one-vowel disagreement over the same Japanese noun."""
+    for canonical, near in ((a, b), (b, a)):
+        for term in ('耳舐め', '耳なめ'):
+            if (term not in canonical['text'] or '耳の目' not in near['text']
+                    or reading(canonical['text']) != expected
+                    or reading(near['text'].replace('耳の目', term)) != expected):
+                continue
+            first = _term_interval(canonical, term)
+            second = _term_interval(near, '耳の目')
+            if (first and second and min(first[1], second[1]) - max(first[0], second[0])
+                    >= max(.2, .7 * max(first[1] - first[0], second[1] - second[0]))):
+                return True
+    return False
+
+
 def confirmed_spellings(row: dict, hints: list, passes: dict, fallback_left: float) -> tuple:
     """Require distinct models to support each proposed word and the surrounding reading."""
     from .context_vocabulary import near_reading
@@ -162,6 +217,9 @@ def confirmed_spellings(row: dict, hints: list, passes: dict, fallback_left: flo
                     if a[0] != b[0] and SequenceMatcher(None, reading(a[1]['text']), reading(b[1]['text']), autojunk=False).ratio() >= .94:
                         if all(min(key(a[1]['text']).count(key(new)),key(b[1]['text']).count(key(new)))>=row['text'].count(old) for old,new in subset):
                             return subset
+            # The final nasal distinguishes two valid nouns even in otherwise identical sentences.
+            if WORD_FINAL_NASAL_HINT in subset:
+                continue
             # Whispered voicing can differ while both readings support the same contextual word.
             for model_a, a in pools.get('primary', []):
                 for model_b, b in pools.get('alternate', []):
@@ -177,6 +235,12 @@ def confirmed_spellings(row: dict, hints: list, passes: dict, fallback_left: flo
                             return subset
             if size==1:
                 old,new=subset[0]
+                if new == '耳舐め' and row['text'].count(old) == 1:
+                    for model_a, a in pools.get('primary', []):
+                        for model_b, b in pools.get('alternate', []):
+                            if (a and b and model_a and model_b and model_a != model_b
+                                    and _aligned_ear_licking(expected_reading, a, b)):
+                                return subset
                 position=row['text'].find(old)
                 expected_window=reading(row['text'][max(0,position-6):position]+new+row['text'][position+len(old):position+len(old)+6])
                 ear=(new=='舐め' and re.search(r'耳[、,\s]*'+re.escape(old),row['text']))

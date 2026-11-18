@@ -801,8 +801,19 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
                 "context_after": [{"text": source_text(s)} for s in segments[offset + len(batch):offset + len(batch) + context_lines]],
             }
             glossary = batch_glossary(pending)
+            from .translation_checks import (alternating_tongue_motion, explicit_question, favorite_ear_action, physical_fit,
+                                             progressive_action_clause, relaxed_expression)
+            source_lines = [source_text(segment) for segment in pending]
+            focused_instructions = ''.join('\n' + instruction for check, instruction in (
+                (explicit_question, 'Keep explicit questions as questions in Chinese.'),
+                (physical_fit, 'Translate physical fit as fit or alignment in the immediate action.'),
+                (relaxed_expression, 'Describe the relaxed or absorbed facial expression in natural Chinese.'),
+                (alternating_tongue_motion, 'Preserve both directions of the tongue moving in and out.'),
+                (favorite_ear_action, 'Attach the preference to the ear-related action as a whole.'),
+                (progressive_action_clause, 'Translate the current progressive action without borrowing connective meaning from neighboring entries.')
+            ) if any(check(line) for line in source_lines))
             messages = [
-                {"role": "system", "content": api_prompt + "\n" + options["instructions"] + ("\n\nMatched glossary:\n" + glossary if glossary else "")},
+                {"role": "system", "content": api_prompt + "\n" + options["instructions"] + focused_instructions + ("\n\nMatched glossary:\n" + glossary if glossary else "")},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ]
             try:
@@ -814,9 +825,12 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
                             continue
                         from .source_checks import artifact
                         from .translation_checks import meaning_errors, context_for
-                        from .translation_checks import normalize_participants
-                        translated[segment['id']]=normalize_participants(source_text(segment),translated[segment['id']])
-                        if artifact(translated[segment['id']]) or meaning_errors(source_text(segment), translated[segment['id']], context_for(segment, segments)):
+                        from .translation_checks import normalize_contextual_actions, normalize_participants
+                        source = source_text(segment)
+                        context = context_for(segment, segments)
+                        translated[segment['id']] = normalize_contextual_actions(
+                            source, normalize_participants(source, translated[segment['id']]), context)
+                        if artifact(translated[segment['id']]) or meaning_errors(source, translated[segment['id']], context):
                             continue
                         if is_untranslated_japanese(source_text(segment), translated[segment["id"]]):
                             segment["needs_audio_review"] = True
@@ -972,7 +986,7 @@ def run(args: argparse.Namespace) -> Path:
         for pass_number in range(2):
             if config["review_audio"]:
                 from .audio_review import review_gaps, review_task
-                from .transcript_refinement import refine, upgrade_splits
+                from .transcript_refinement import refine, trim_word_padding, upgrade_splits
                 from .short_speech import review_short_speech
                 try:
                     upgrade_splits(cache, cache_path, config)
@@ -981,7 +995,12 @@ def run(args: argparse.Namespace) -> Path:
                     review_gaps(recognition_source, cache, cache_path, config)
                     review_task(recognition_source, cache, cache_path, config)
                     refine(recognition_source, cache, cache_path, config)
+                    trim_word_padding(cache, cache_path)
+                    from .weak_sequence import review_weak_sequences
+                    review_weak_sequences(recognition_source, cache, cache_path, config)
                     review_short_speech(recognition_source, cache, cache_path, config)
+                    from .sound_review import review_sounds
+                    review_sounds(recognition_source, cache, cache_path, config)
                     from .count_review import review_counts
                     review_counts(recognition_source, cache, cache_path, config)
                 except (OSError, RuntimeError, ValueError) as exc:

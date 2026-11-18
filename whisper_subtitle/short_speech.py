@@ -168,12 +168,79 @@ def supplement(row: dict, recognized: dict, window: dict) -> bool:
     return True
 
 
+def confirmed_omitted_speech(row: dict, window: dict, passes: dict) -> bool:
+    from .audio_review import lexical_speech
+
+    primary = passes['primary']
+    alternate = passes['alternate']
+    if not primary['model'] or not alternate['model'] or primary['model'] == alternate['model']:
+        return False
+    a, b = (hypothesis(result['items'], window) for result in (primary, alternate))
+    return bool(a and b and lexical_speech(a['text'])
+                and dialogue_key(a['text']) == dialogue_key(b['text']) == dialogue_key(row['text'])
+                and min(a['end'], b['end'], row['end']) - max(a['start'], b['start'], row['start']) >= .4)
+
+
+def restore_omitted_speech(source: Path, cache: dict, path: Path, config: dict) -> None:
+    import numpy as np
+    from . import cli
+    from .audio_review import ReviewRecognizer, decode_window, lexical_speech, normalize_review_audio
+    from .transcript_refinement import VERSION as REFINEMENT_VERSION, _clear_translation, compact
+
+    candidates = []
+    for row in cache.get('segments', []):
+        review = row.get('audio_review', {})
+        if (review.get('status') == 'omitted' and review.get('reason') == 'isolated_short'
+                and review.get('speech_seconds', 1) < .1 and not row.get('omitted_speech_review')
+                and row.get('no_speech_prob', 1) < .35
+                and 1.5 <= row['end'] - row['start'] <= 6
+                and 4 <= len(compact(row['text'])) <= 22 and lexical_speech(row['text'])):
+            candidates.append(row)
+    if not candidates or not alternate_available(config):
+        return
+    backup = path.with_name('task.before-omitted-speech-review.json')
+    if not backup.exists():
+        cli.save_json(backup, cache)
+    for row in candidates:
+        later = (r['start'] for r in cache['segments'] if r['start'] >= row['end'] and r['id'] != row['id']
+                 and r.get('audio_review', {}).get('status') != 'omitted')
+        right = min(row['end'] + .65, min(later, default=row['end'] + .65))
+        detail = {'status': 'uncertain', 'windows': []}
+        print(f"Checking previously omitted quiet speech ({cli.console_time(row['start'])})...", flush=True)
+        for offset in (.45, -.35):
+            left = max(0, row['start'] + offset)
+            channels = [decode_window(source, left, right, channel=side) for side in ('left', 'right')]
+            track = max(channels, key=lambda audio: np.percentile(np.abs(audio), 99.5))
+            clip = np.pad(normalize_review_audio(track, peak_target=.3, max_gain=16), (3200, 3200))
+            window = {'left': left - .2, 'focus': [row['start'] - .15, right], 'right': right}
+            passes = {}
+            for label, alternate in [('primary', False), ('alternate', True)]:
+                model = ReviewRecognizer(config, alternate=alternate)
+                try:
+                    items = model.short_clip(clip)
+                    passes[label] = {'model': model.model_name, 'items': items}
+                finally:
+                    model.model = None
+            detail['windows'].append({'window': window, 'passes': passes})
+            if confirmed_omitted_speech(row, window, passes):
+                detail['status'] = 'restored'
+                row['audio_review'].update(status='restored',
+                                           note='Two local models re-confirmed this quiet original line.')
+                row.setdefault('refinement', {'version': REFINEMENT_VERSION, 'parent_id': row['id'],
+                                              'status': 'unchanged', 'short_confirmed': True})
+                _clear_translation(row)
+                break
+        row['omitted_speech_review'] = detail
+        cli.save_json(path, cache)
+
+
 def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dict) -> list[int]:
     from . import cli as main
     from .audio_review import ReviewRecognizer, decode_window
     from .transcript_refinement import VERSION as REFINEMENT_VERSION, _clear_translation
     if cache.get('language') != 'ja' or config.get('quality', 'high') != 'high' or main.asr_settings(config)['model'] != 'large-v2':
         return []
+    restore_omitted_speech(source, cache, cache_path, config)
     state = cache.get('short_speech', {})
     if state.get('version') == VERSION and state.get('complete'):
         return []

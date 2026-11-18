@@ -268,7 +268,21 @@ def relationship_guidance(lines: list[str], source_context: str = "") -> str:
         notes.append('\u8bed\u6cd5\u63d0\u793a\uff1a\u3042\u3052\u308b\u7684\u4e3b\u8bed\u63d0\u4f9b\u52a8\u4f5c\uff0c\u5bf9\u65b9\u63a5\u53d7\u52a8\u4f5c\u3002\u6839\u636e\u539f\u6587\u548c\u8bed\u5883\u786e\u5b9a\u4eba\u79f0\uff0c\u4fdd\u6301\u52a8\u4f5c\u65b9\u5411\u3002')
     if re.search(r'てもらいたい', source):
         notes.append('\u8bed\u6cd5\u63d0\u793a\uff1a\u3082\u3089\u3046\u7684\u4e3b\u8bed\u63a5\u53d7\u52a8\u4f5c\uff0c\u306b\u6807\u8bb0\u52a8\u4f5c\u7684\u63d0\u4f9b\u8005\u3002\u6839\u636e\u539f\u6587\u548c\u8bed\u5883\u786e\u5b9a\u4eba\u79f0\uff0c\u4fdd\u6301\u52a8\u4f5c\u65b9\u5411\u3002')
-    from .translation_checks import action_sound, intimate_context
+    from .translation_checks import (action_sound, alternating_tongue_motion, climax_context, climax_with_partner,
+                                     explicit_question, favorite_ear_action, physical_fit, progressive_action_clause,
+                                     relaxed_expression)
+    if any(favorite_ear_action(line) for line in lines):
+        notes.append('「好きな」修饰完整的服务动作。用「你喜欢的舔耳」或「你喜欢的掏耳朵」这样的结构，保留原文的具体动作。')
+    if any(progressive_action_clause(line) for line in lines):
+        notes.append('\u77ed\u53e5\u8868\u793a\u9010\u6e10\u8fdb\u884c\u7684\u5177\u4f53\u52a8\u4f5c\u3002\u53ea\u7ffb\u8bd1\u5f53\u524d\u77ed\u53e5\uff0c\u4fdd\u7559\u52a8\u4f5c\u548c\u65b9\u5411\uff0c\u4e0d\u501f\u7528\u4e0b\u53e5\u7684\u5e76\u5217\u5173\u7cfb\u3002')
+    if any(explicit_question(line) for line in lines):
+        notes.append('\u4fdd\u7559\u539f\u6587\u660e\u786e\u7684\u7591\u95ee\u8bed\u6c14\uff1b\u5982\u679c\u662f\u95ee\u53e5\uff0c\u7528\u81ea\u7136\u7684\u4e2d\u6587\u95ee\u53e5\u548c\u95ee\u53f7\u3002')
+    if any(physical_fit(line) for line in lines):
+        notes.append('\u8eab\u4f53\u52a8\u4f5c\u7684\u76f8\u6027\u6307\u5177\u4f53\u63a5\u89e6\u7684\u5951\u5408\u7a0b\u5ea6\uff0c\u6309\u52a8\u4f5c\u8bed\u5883\u7ffb\u8bd1\uff0c\u4e0d\u628a\u5b83\u6269\u5927\u4e3a\u604b\u7231\u5173\u7cfb\u3002')
+    if any(relaxed_expression(line) for line in lines):
+        notes.append('\u5f62\u5bb9\u8138\u6216\u8868\u60c5\u7684\u30c8\u30ed\u30c8\u30ed\u8868\u793a\u653e\u677e\u3001\u9676\u9189\u6216\u6c89\u6d78\u7684\u795e\u60c5\uff0c\u7528\u81ea\u7136\u7684\u4e2d\u6587\u63cf\u8ff0\u3002')
+    if any(alternating_tongue_motion(line) for line in lines):
+        notes.append('\u820c\u3092\u51fa\u3057\u5165\u308c\u3059\u308b\u8868\u793a\u820c\u5934\u6765\u56de\u8fdb\u51fa\uff0c\u4e2d\u6587\u4fdd\u7559\u4e24\u4e2a\u65b9\u5411\u7684\u5f80\u8fd4\u52a8\u4f5c\u3002')
     if action_sound(source):
         notes.append('\u8fd9\u662f\u72ec\u7acb\u52a8\u4f5c\u62df\u58f0\uff0c\u4f7f\u7528\u7b80\u77ed\u7684\u52a8\u4f5c\u8868\u8fbe\uff0c\u4fdd\u7559\u7701\u7565\u7684\u4eba\u79f0\u3002')
     if re.search(r'ー+っと',source):
@@ -277,8 +291,10 @@ def relationship_guidance(lines: list[str], source_context: str = "") -> str:
         notes.append('\u8fd9\u53e5\u8bdd\u8be2\u95ee\u542c\u8005\u662f\u5426\u60f3\u63a5\u53d7\u8bf4\u8bdd\u8005\u7684\u8214\u8033\u670d\u52a1\uff0c\u4f7f\u7528\u201c\u60f3\u8ba9\u6211\u8214\u2026\u2026\u201d\u7684\u52a8\u4f5c\u65b9\u5411\u3002')
     if re.search(r'耳.{0,14}(?:なぞられ|舐められ|なめられ|触れられ)',source) and not re.search(r'彼|彼女|あの人|その人|友達',source+'\n'+source_context):
         notes.append('\u8fd9\u53e5\u8bdd\u63cf\u8ff0\u542c\u8005\u8033\u6735\u88ab\u89e6\u78b0\u540e\u7684\u53cd\u5e94\uff0c\u4f7f\u7528\u7b2c\u4e8c\u4eba\u79f0\u6216\u7701\u7565\u4eba\u79f0\u3002')
-    if intimate_context(source+'\n'+source_context) and re.search(r'行[くこきっ]|い[くこきっ]',source):
+    if climax_context(source+'\n'+source_context) and re.search(r'行[くこきっ]|い[くこきっけ]',source):
         notes.append('\u7ed3\u5408\u4eb2\u5bc6\u884c\u4e3a\u8bed\u5883\u7406\u89e3\u300c\u884c\u304f\uff0f\u3044\u304f\u300d\u8868\u793a\u9ad8\u6f6e\uff1b\u660e\u786e\u7684\u51fa\u884c\u3001\u5de5\u4f5c\u6216\u8ba1\u5212\u8bed\u5883\u4fdd\u6301\u65e5\u5e38\u542b\u4e49\u3002')
+    if any(climax_with_partner(line, source_context) for line in lines):
+        notes.append('\u8fd9\u53e5\u8bdd\u662f\u5728\u8bf4\u8fbe\u5230\u9ad8\u6f6e\u3002\u628a\u300c\u4e00\u7dd2\u306b\u884c\u3053\u3046\u300d\u6216\u300c\u884c\u3063\u3066\u2026\u4e00\u7dd2\u306b\u300d\u8bd1\u6210\u201c\u4e00\u8d77\u9ad8\u6f6e\u201d\u7b49\u95ee\u7b54\uff0c\u7528\u539f\u6587\u4eba\u79f0\u548c\u8bed\u6c14\u3002')
     return '\n'.join(notes)
 
 
@@ -444,8 +460,10 @@ class SakuraServer:
             text = "\n".join(text.splitlines()[1:-1])
         translated = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines)==len(translated):
-            from .translation_checks import normalize_participants
-            translated=[normalize_participants(source,target) for source,target in zip(lines,translated)]
+            from .translation_checks import normalize_contextual_actions, normalize_participants
+            check_context = source_context if check_source_context is None else check_source_context
+            translated = [normalize_contextual_actions(source, normalize_participants(source, target), check_context)
+                          for source, target in zip(lines, translated)]
         validate_translations(lines, translated, history=history if check_history is None else check_history,
                               source_context=source_context if check_source_context is None else check_source_context)
         return translated

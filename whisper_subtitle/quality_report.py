@@ -55,6 +55,10 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             continue
         if review.get("status") == "unresolved":
             add(row, "unresolved_audio", "Local audio review did not recover reliable replacement text.")
+        if row.get('omitted_speech_review', {}).get('status') == 'restored':
+            add(row, 'omitted_quiet_speech_restored', 'Two local models re-confirmed previously omitted quiet speech.', 'info')
+        elif review.get('status') == 'restored':
+            add(row, 'rejected_review_restored', 'Restored the earlier transcript after an invalid replacement.', 'info')
         if review.get("status") == "context_unresolved":
             add(row, "audio_context_uncertain", "A possible homophone/action mismatch remains after local audio review; check the surrounding dialogue.")
         short = row.get('short_review', {})
@@ -70,13 +74,23 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, "gap_speech_recovered", "Speech was recovered from an untranscribed gap; verify the new wording.", "info")
             if row["gap_review"].get("avg_logprob", 0) < -.5:
                 add(row, "low_confidence_recovery", "Recovered wording has low recognition confidence; review homophones and context.")
+        if row.get('sound_review'):
+            add(row, 'directional_sound_recovered', 'Two local models confirmed this repeated sound effect in an uncovered stereo interval.', 'info')
         from .transcript_refinement import low_confidence
         refinement = row.get('refinement', {})
+        if row.get('weak_sequence_review', {}).get('status') == 'recovered':
+            add(row, 'weak_sequence_recovered', 'Two local models recovered speech spanning an unreliable boundary.', 'info')
+        if refinement.get('question_restored'):
+            add(row, 'question_restored', 'Restored the original question mark for the same recognized words.', 'info')
+        if refinement.get('primary_supported_original'):
+            add(row, 'refinement_original_restored', 'Restored archived words supported by the primary model.', 'info')
+        if row.get('word_padding_trimmed'):
+            add(row, 'word_padding_trimmed', 'Removed long timing padding outside the reliably aligned words.', 'info')
         if refinement.get('source_protected') and refinement.get('part', 1) == 1 and short.get('status') != 'supplemented':
             add(row, 'protected_source', 'Reliable initial wording was preserved; only word-based subtitle splitting was applied.', 'info')
         if low_confidence(row):
             add(row, 'low_confidence_asr', 'Recognition scores suggest uncertain wording; review this audio region.')
-        if refinement.get('status') == 'uncertain':
+        if refinement.get('status') == 'uncertain' and row.get('weak_sequence_review', {}).get('status') != 'recovered':
             add(row, 'uncertain_refinement', 'Local re-listening did not provide a reliable replacement; existing wording was retained.')
         if refinement.get('status') == 'revised':
             add(row, 'revised_asr', f"Local re-listening changed the source; parent ID: {refinement['parent_id']}; similarity: {refinement.get('similarity', 'unknown')}.",

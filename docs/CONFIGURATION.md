@@ -99,6 +99,18 @@ leave the corresponding checks pending. Use `--report` to inspect remaining
 uncertainties, `-q normal` to skip focused refinement, or `review_audio: false` to
 disable audio review.
 
+Audio review retains the prior text when a retry returns corrupt or repetitive
+text. High-quality Japanese review can also recheck weak speech near a collapsed
+or unusually short neighboring entry and preserve marked questions.
+Two local models can restore previously omitted quiet dialogue when both match
+the original wording. Whole-sentence similarity alone cannot confirm a word
+change during refinement. For known close pronunciations, source review checks
+the word's timing across both decodes and requires the surrounding words to agree.
+
+In Japanese stereo tracks, the same models can also check repeated sound effects
+in longer gaps when activity is concentrated in one channel. Both models must
+agree on the repeated sound and its timing before the app adds a subtitle.
+
 ### Models and GPU libraries
 
 Missing Whisper models download from Hugging Face to `download_root`. A complete
