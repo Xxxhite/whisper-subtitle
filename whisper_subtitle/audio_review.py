@@ -47,7 +47,7 @@ def decode_window(source: Path, start: float, end: float, *, channel: str | None
     if channel not in {None,'left','right'}:
         raise ValueError('Audio review channel must be left or right.')
     chunks = []
-    with av.open(str(source)) as container:
+    with av.open(str(source), metadata_errors='replace') as container:
         stream = container.streams.audio[0]
         origin = float(stream.start_time or 0) * stream.time_base
         begin, finish = max(0.0, start) + origin, end + origin
@@ -88,13 +88,13 @@ def is_intro_candidate(segment: dict, segments: list[dict]) -> bool:
 
 def closing_phrase(text: str) -> bool:
     key = ''.join(c for c in unicodedata.normalize('NFKC', text) if c.isalnum())
-    return bool(re.fullmatch(r'(?:ご)?視(?:聴)?(?:ありがとう(?:ございました|ございます)?|感謝)?|おやすみ(?:なさい)?|(?:おわり|終わり|おしまい|終了)(?:です)?', key))
+    return bool(re.fullmatch(r'(?:それでは|では|それじゃあ?)?(?:ご)?視(?:聴)?(?:ありがとう(?:ございました|ございます)?|感謝)?|おやすみ(?:なさい)?|(?:おわり|終わり|おしまい|終了)(?:です)?', key))
 
 
 def weak_closing(segment: dict, cache: dict, speech: float) -> bool:
     originals = cache.get('refinement', {}).get('originals', {})
     details = segment.get('refinement', {})
-    initial = originals.get(str(details.get('parent_id', segment['id'])), segment)
+    initial = originals.get(str(details.get('parent_id', segment.get('id'))), segment)
     probabilities = [w['probability'] for w in initial.get('words', []) if 'probability' in w]
     strong = (initial.get('avg_logprob', -2) > -.45 and initial.get('no_speech_prob', 1) < .3
               and probabilities and sum(probabilities) / len(probabilities) >= .75)
@@ -299,7 +299,7 @@ def review_gaps(source: Path, cache: dict, cache_path: Path, config: dict) -> li
     if not previous or previous.get("version") != GAP_REVIEW_VERSION:
         import av
         from faster_whisper.vad import get_speech_timestamps
-        with av.open(str(source)) as container:
+        with av.open(str(source), metadata_errors='replace') as container:
             duration = container.duration / av.time_base if container.duration else max(row["end"] for row in cache["segments"])
         audio = decode_window(source, 0, duration)
         speech = get_speech_timestamps(audio, threshold=.5, min_speech_duration_ms=150,
@@ -326,6 +326,10 @@ def review_gaps(source: Path, cache: dict, cache_path: Path, config: dict) -> li
                         or not lexical_speech(row["text"])
                         or any(min(right, old["end"]) - max(left, old["start"]) > .1 for old in cache["segments"])):
                     continue
+                if closing_phrase(row['text']):
+                    clip = decode_window(source, left, right)
+                    if weak_closing(row, cache, speech_seconds(clip, threshold=.5)):
+                        continue
                 item = {"id": max((r["id"] for r in cache["segments"]), default=0) + 1,
                         "start": left, "end": right, "text": row["text"],
                         **{key: row[key] for key in ("avg_logprob", "no_speech_prob", "compression_ratio") if key in row},

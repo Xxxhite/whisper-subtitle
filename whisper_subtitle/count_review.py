@@ -6,7 +6,7 @@ import re
 from .counting import number, number_key, sessions
 from .source_checks import key, artifact
 
-VERSION = 1
+VERSION = 3
 DECISION_VERSION = 2
 
 
@@ -31,7 +31,8 @@ def plan(rows: list[dict], *, duration: float | None = None) -> list[dict]:
     from .subtitle_processing import sound_key
     valid=sorted((r for r in rows if r.get('audio_review',{}).get('status')!='omitted'),key=lambda r:r['start'])
     windows=[]
-    for left,right in sessions(valid):
+    sessions_cache = sessions(valid)
+    for left,right in sessions_cache:
         right=min(right,duration if duration is not None else max(r['end'] for r in valid))
         local=[r for r in valid if left<=r['start']<=right]
         numeric=[r for r in local if number(r['text'],counting=True) is not None]
@@ -69,6 +70,24 @@ def plan(rows: list[dict], *, duration: float | None = None) -> list[dict]:
                                     'focus':[start,min(end,start+8)]})
                     start+=6
             cursor=max(cursor,row['end'])
+    # Some countdowns recur before an action without a spoken declaration.
+    anchors = []
+    for row in valid:
+        opening = re.split(r'[、,，。…]', row['text'], maxsplit=3)[:3]
+        if len(opening) == 3 and all(number(part, counting=True) in range(11) for part in opening):
+            anchors.append(row)
+    for before, after in zip(valid, valid[1:]):
+        start, end = before['end'], after['start']
+        declared = any(a <= end <= b for a, b in sessions_cache)
+        words = after.get('words', [])
+        if (declared and 2 <= end - start <= 8 and after['end'] - end <= 12 and words
+                and after in anchors and words[0].get('probability', 1) < .5
+                and ''.join(w['word'] for w in words).strip() == after['text']):
+            windows.append({'kind': 'early_count', 'ids': [after['id']], 'left': start,
+                            'right': after['end'], 'focus': [start, end]})
+        if (3 <= end - start <= 9 and not declared
+                and any(0 <= anchor['start'] - end <= 12 for anchor in anchors)):
+            windows.append({'kind': 'sequence_gap', 'ids': [], 'left': start, 'right': end, 'focus': [start, end]})
     return sorted(windows,key=lambda w:(w['left'],w['right']))
 
 
@@ -161,6 +180,118 @@ def confirmed(passes: dict, window: dict, original: list[dict]) -> list[dict]:
     return sorted(result,key=lambda e:e['start'])
 
 
+def sequence_clip(source: Path, window: dict):
+    """Locate separated voice activity independently in each channel before decoding."""
+    import numpy as np
+    from faster_whisper.vad import get_speech_timestamps
+    from .audio_review import decode_window, normalize_review_audio
+    choices = []
+    for channel in ('left', 'right'):
+        audio = decode_window(source, window['left'], window['right'], channel=channel)
+        gap = audio[:round((window['focus'][1] - window['left']) * 16000)]
+        speech = get_speech_timestamps(gap, threshold=.35, min_speech_duration_ms=100,
+                                       min_silence_duration_ms=100, speech_pad_ms=0)
+        if len(speech) >= 2:
+            choices.append((sum(r['end'] - r['start'] for r in speech), channel, speech, audio))
+    if not choices:
+        return None, {}
+    _, channel, speech, audio = max(choices, key=lambda entry: entry[0])
+    offset = 0 if window['kind'] == 'early_count' else max(0, speech[0]['start'] - 10400)
+    clip = normalize_review_audio(audio[offset:], peak_target=.3, max_gain=10, amplify_only=True)
+    return np.pad(clip, (3200, 3200)), {'channel': channel, 'offset': window['left'] + offset/16000 - .2,
+            'speech': [[window['left'] + r[k]/16000 for k in ('start', 'end')] for r in speech]}
+
+
+def timed_number_tokens(words: list[dict]) -> list[dict]:
+    """Collect complete spoken numbers even when kana syllables are separate tokens."""
+    result, pending = [], []
+    for word in words:
+        if not key(word['word']):
+            if pending:
+                return []
+            continue
+        pending.append(word)
+        spelling = ''.join(w['word'] for w in pending)
+        value = number(spelling, counting=True)
+        if value is None:
+            if len(pending) >= 4 or re.search(r'[、,。…]', spelling):
+                return []
+            continue
+        if value > 10:
+            return []
+        result.append({'value': value, 'start': pending[0]['start'], 'end': word['end'],
+                       'probability': sum(w.get('probability', 0) for w in pending) / len(pending)})
+        pending = []
+    return [] if pending else result
+
+
+def sequence_events(passes: dict, window: dict) -> list[dict]:
+    """Require the complete unprompted token lists and individual end times to agree."""
+    if not passes['primary']['model'] or passes['primary']['model'] == passes['alternate']['model']:
+        return []
+    sequences = []
+    for record in passes.values():
+        items = record['plain']['items']
+        if len(items) != 1 or items[0].get('no_speech_prob', 1) >= .55 or items[0].get('avg_logprob', -2) < -.85:
+            return []
+        words = timed_number_tokens(items[0].get('words', []))
+        if not 3 <= len(words) <= 10:
+            return []
+        sequences.append(words)
+    a, b = sequences
+    if len(a) != len(b):
+        return []
+    offset = passes['primary']['offset']
+    result = []
+    for x, y in zip(a, b):
+        value = x['value']
+        start = max(window['left'], offset + max(x['start'], y['start']))
+        end = min(window['right'], offset + min(x['end'], y['end']))
+        if (value != y['value'] or end - start < .12 or abs(x['end'] - y['end']) > .35
+                or min(x.get('probability', 0), y.get('probability', 0)) < .35
+                or max(x.get('probability', 0), y.get('probability', 0)) < .7
+                or result and result[-1]['end'] > start):
+            return []
+        result.append({'value': value, 'start': start, 'end': end, 'soft': False})
+    speech = passes['primary']['speech']
+    supported = 0
+    for event in result:
+        regions = [(a, b) for a, b in speech if min(event['end'], b) - max(event['start'], a) >= .08]
+        if regions:
+            supported += 1
+            event['start'] = max(event['start'], regions[0][0] - .12)
+    if supported < 2:
+        return []
+    return result
+
+
+def early_count(passes: dict, window: dict, row: dict) -> dict | None:
+    """Move the first count only if both decoders align it before its cached line."""
+    if not passes['primary']['model'] or passes['primary']['model'] == passes['alternate']['model']:
+        return None
+    expected = [number(w['word']) for w in row.get('words', [])[:2]]
+    if len(expected) != 2 or None in expected or expected[0] == expected[1]:
+        return None
+    first = []
+    for record in passes.values():
+        items = record['plain']['items']
+        if not items or items[0].get('no_speech_prob', 1) >= .55:
+            return None
+        words = [w for w in items[0].get('words', []) if key(w['word'])]
+        if ([number(w['word']) for w in words[:2]] != expected
+                or min(w.get('probability', 0) for w in words[:2]) < .7):
+            return None
+        first.append([record['offset'] + words[0][k] for k in ('start', 'end')])
+    start = max(window['left'], first[0][0], first[1][0])
+    end = min(first[0][1], first[1][1])
+    if end > row['start'] - .6 or abs(first[0][1] - first[1][1]) > .3:
+        return None
+    for left, right in passes['primary']['speech']:
+        if min(end, right) - max(start, left) >= .15:
+            return {'value': expected[0], 'start': max(start, left - .12), 'end': end, 'soft': False}
+    return None
+
+
 def review_counts(source: Path, cache: dict, path: Path, config: dict) -> None:
     from . import cli
     from .audio_review import ReviewRecognizer,decode_window,speech_seconds
@@ -173,7 +304,7 @@ def review_counts(source: Path, cache: dict, path: Path, config: dict) -> None:
     if state.get('complete') and state.get('signature')==current and state.get('decision_version')==DECISION_VERSION:return
     if state.get('signature')!=current:
         import av
-        with av.open(str(source)) as container:
+        with av.open(str(source), metadata_errors='replace') as container:
             duration=container.duration/av.time_base if container.duration else max(r['end'] for r in cache['segments'])
         windows=plan(cache['segments'],duration=duration)
         if not windows:return
@@ -182,7 +313,12 @@ def review_counts(source: Path, cache: dict, path: Path, config: dict) -> None:
         history=list(state.get('previous_evidence',[]))
         archived=archive_evidence(state,path)
         if archived and archived not in history:history.append(archived)
-        state={'version':VERSION,'signature':current,'windows':windows,'passes':{},'complete':False,
+        previous_windows = {cli.fingerprint(w): str(i) for i, w in enumerate(state.get('windows', []))}
+        reusable = {}
+        for label, records in state.get('passes', {}).items():
+            reusable[label] = {str(i): records[previous_windows[cli.fingerprint(w)]] for i, w in enumerate(windows)
+                               if previous_windows.get(cli.fingerprint(w)) in records}
+        state={'version':VERSION,'signature':current,'windows':windows,'passes':reusable,'complete':False,
                'previous_evidence':history}
         cache['count_review']=state;cli.save_json(path,cache)
     windows=state['windows']
@@ -193,6 +329,12 @@ def review_counts(source: Path, cache: dict, path: Path, config: dict) -> None:
             for i,w in enumerate(windows):
                 if str(i) in results:continue
                 print(f"Checking count {i+1}/{len(windows)} ({label}; {cli.console_time(w['left'])})...",flush=True)
+                if w['kind'] in ('sequence_gap', 'early_count'):
+                    audio, location = sequence_clip(source, w)
+                    rows = recognizer.short_clip(audio) if audio is not None else []
+                    results[str(i)] = {'model': recognizer.model_name, 'plain': {'items': rows}, **location}
+                    cli.save_json(path, cache)
+                    continue
                 audio=decode_window(source,w['left'],w['right'])
                 guided={'items':recognizer.counting(audio)}
                 plain={'items':recognizer.counting(audio,hinted=False)} if events(guided,w) or len(w['ids'])>=2 else {'items':[]}
@@ -203,7 +345,25 @@ def review_counts(source: Path, cache: dict, path: Path, config: dict) -> None:
     for i,w in enumerate(windows):
         originals=[r for r in cache['segments'] if r['id'] in w['ids']]
         passes={label:state['passes'][label][str(i)] for label in ['primary','alternate']}
-        values=confirmed(passes,w,originals)
+        if w['kind'] == 'early_count':
+            row = originals[0]
+            event = early_count(passes, w, row)
+            if not event or any(r is not row and r.get('audio_review', {}).get('status') != 'omitted'
+                                and r['end'] > event['start'] and r['start'] < event['end'] for r in cache['segments']):
+                continue
+            row.setdefault('original_asr', {k: row[k] for k in ('text', 'start', 'end')})
+            row['words'] = row['words'][1:]
+            row.update(text=''.join(word['word'] for word in row['words']).strip(), start=row['words'][0]['start'])
+            _clear_translation(row)
+            changes.append(row['id'])
+            identifier = max(r['id'] for r in cache['segments']) + 1
+            word = {'word': str(event['value']), 'start': event['start'], 'end': event['end']}
+            cache['segments'].append({'id': identifier, 'text': word['word'], 'start': word['start'], 'end': word['end'],
+                                      'words': [word], 'count_review': {'version': VERSION, 'status': 'recovered',
+                                      'value': event['value'], 'split_from': row['id'], 'window': w}})
+            changes.append(identifier)
+            continue
+        values = sequence_events(passes, w) if w['kind'] == 'sequence_gap' else confirmed(passes,w,originals)
         evidence={'window':copy.deepcopy(w),'passes':copy.deepcopy(passes),
                   'originals':[{k:r[k] for k in ['id','text','start','end']} for r in originals]}
         if not values and len(originals)>=3:
@@ -222,9 +382,14 @@ def review_counts(source: Path, cache: dict, path: Path, config: dict) -> None:
             others=[r for r in cache['segments'] if r['id'] not in w['ids'] and r.get('audio_review',{}).get('status')!='omitted']
             overlap=[r for r in others if min(event['end'],r['end'])-max(event['start'],r['start'])>.1]
             vocal=lambda r:bool(key(r['text'])) and all(c in 'あいうえおぁぃぅぇぉんっはふへほ' for c in key(r['text']))
-            if overlap and (w['kind']=='gap' or not all(vocal(r) for r in overlap)):continue
-            if w['kind']=='gap':
-                if any(abs(r['start']-event['start'])<.5 for r in others):continue
+            if overlap and (not originals or not all(vocal(r) for r in overlap)):continue
+            if not originals:
+                # The same number can be spoken several times. Only a weak leading
+                # token in the next line leaves its ownership in this gap ambiguous.
+                if w['kind'] == 'gap' and any(0 <= r['start'] - w['right'] <= .5 and r.get('words')
+                       and r['words'][0].get('probability', 1) < .5
+                       and number(r['words'][0]['word']) == event['value'] for r in others):
+                    continue
                 row={'id':max(r['id'] for r in cache['segments'])+1}
                 cache['segments'].append(row)
             else:

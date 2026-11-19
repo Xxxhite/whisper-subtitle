@@ -8,6 +8,11 @@ from .source_checks import artifact, implausible_duplicate, key, reading, word_c
 
 VERSION = 5
 WORD_FINAL_NASAL_HINT = ('精神', '精子')
+SERVICE_NEAR_SOUND_HINT = ('魔女', 'マゾ')
+QUIET_PHRASE_HINTS = {
+    ('はっとこい', 'あったかい'), ('ドローン', 'とろーん'),
+    ('安全と', 'ずっと'), ('隙間', '好き'), SERVICE_NEAR_SOUND_HINT,
+}
 # Vocabulary hints select acoustic checks; they never perform source replacements directly.
 # Each spelling change needs independent acoustic evidence and matching surrounding words.
 TERMS = (
@@ -37,12 +42,29 @@ TERMS = (
     (('おちいち',), 'おちんちん', ('気持ち', 'エッチ', 'しこ', '我慢'), ()),
     (('ばっか',), '真っ赤', ('耳', 'キス'), ('働', '仕事')),
     (('ずらして',), 'じらして', ('我慢', 'おちん', '精子'), ('位置', '椅子', '机', '身体を', '体を')),
+    (('はっとこい',), 'あったかい', ('体温',), ()),
+    (('ドローン',), 'とろーん', ('眠た', '眠そう', '眠く'), ('飛ばす', '飛行', '操縦', '撮影')),
+    (('安全と',), 'ずっと', ('一緒だ', '一緒にいる'), ('安全と危険', '安全と衛生', '安全と安心')),
+    (('魔女',), 'マゾ', ('ムラムラ', '仰向け', '抜いて', '我慢でき'),
+     ('魔法', '魔術', '呪い', 'ハロウィン', '魔女狩り')),
 )
 
 
 def spelling_hints(row: dict, rows: list[dict]) -> list[tuple[str, str]]:
     from .context_vocabulary import vocabulary_hints
     hints = vocabulary_hints(row, rows, TERMS)
+    text = row['text']
+    # A repeated near-sound is plausible in quiet dialogue only when a nearby line establishes the word.
+    if (re.fullmatch(r'(?:隙間[、。…\s]*|ね[えぇー][、。…\s]*){2,6}', text)
+            and '隙間' in text and any(r is not row and row['start'] - 75 <= r['end'] <= row['end'] + 25
+                                      and '好き' in r['text'] for r in rows)):
+        hints = [('隙間', '好き'), *hints]
+    required_phrases = {
+        'ドローン': r'顔[、を\s]*ドローンって',
+        '安全と': r'安全と[、\s]*一緒(?:だ|にい)',
+        '魔女': r'魔女(?:じゃん|なんだから|だから|のお兄さん)',
+    }
+    hints = [hint for hint in hints if hint[0] not in required_phrases or re.search(required_phrases[hint[0]], text)]
     possessive = re.search(r'(?:君|きみ|あなた|お兄さん)の精神(?=[、。…\sを]|$)', row['text'])
     if possessive and row['text'].count('精神') == 1:
         neighbors = [item for item in rows if item is not row
@@ -55,12 +77,27 @@ def spelling_hints(row: dict, rows: list[dict]) -> list[tuple[str, str]]:
         if (re.search(r'(?:中|奥)に(?:出して|だして|射精して)', before)
                 and re.match(destination + r'(?:ちょうだい|頂戴|入れて|出して|だして)', after)):
             return ([WORD_FINAL_NASAL_HINT] + hints)[:2]
-    return hints
+    return hints[:2]
 
 
 def _initial(row: dict, cache: dict) -> dict:
     parent = row.get('refinement', {}).get('parent_id', row['id'])
     return cache.get('refinement', {}).get('originals', {}).get(str(parent), row)
+
+
+def contextual_homophones(row: dict, rows: list[dict]) -> list[tuple[str, str]]:
+    """Disambiguate identical readings using explicit surrounding words."""
+    text = row['text']
+    if re.search(r'初めてで使命あり[、…\s]*(?:コース|予約)', text):
+        return [('使命', '指名')]
+    if re.search(r'髪パンツ[を、\s]*履', text):
+        return [('髪パンツ', '紙パンツ')]
+    if 'バッキン' in text:
+        nearby = '\n'.join(r['text'] for r in rows if row['start'] - 12 <= r['end']
+                           and r['start'] <= row['end'] + 12 and r.get('audio_review', {}).get('status') != 'omitted')
+        if re.search(r'[0-9０-９一二三四五六七八九十百千]+万円', nearby) and re.search(r'払えない|払って|払える', nearby):
+            return [('バッキン', '罰金')]
+    return []
 
 
 def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
@@ -74,10 +111,11 @@ def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
     from .sakura import rhythmic_input
     from .subtitle_processing import sound_key
     from .counting import number
+    from .translation_checks import action_sound
     if (row['end'] - row['start'] >= 6 and len(key(row['text'])) <= 4
             and re.fullmatch(r'[ぁ-ゖァ-ヺ一-鿿ー]+[.…。!?？!]*',row['text'])
             and number(row['text'], counting=True) is None
-            and sound_key(row['text']) is None and not rhythmic_input(row['text'])):
+            and sound_key(row['text']) is None and not rhythmic_input(row['text']) and not action_sound(row['text'])):
         return 'sparse_timing', []
     if cache.get('language') == 'ja':
         if re.search(r'[\uac00-\ud7a3]', row['text']):
@@ -87,6 +125,9 @@ def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
                 and re.fullmatch(r'[ァ-ヺー、,。.…\s]+', row['text'])
                 and repeated_kana(row['text']) and sound_key(row['text']) is None):
             return 'uncertain_repetition', []
+        homophones = contextual_homophones(row, cache['segments'])
+        if homophones:
+            return 'contextual_homophones', homophones
         hints = spelling_hints(row, cache['segments'])
         # Reuse an already gathered alternate hypothesis instead of repeating audio work.
         details = row.get('refinement', {})
@@ -103,7 +144,66 @@ def _selection(row: dict, cache: dict) -> tuple[str | None, list]:
                 return 'cached_homophone', hints
         if hints:
             return 'contextual_spelling', hints
+        if _weak_content_words(row) and sum(w.get('probability', 1) < .42 for w in row['words']) >= 3:
+            return 'local_word_evidence', []
+        alignment = row.get('alignment_review', {})
+        if (alignment.get('status') == 'uncertain'
+                and _local_word_replacement(row, list(alignment.get('passes', {}).values()))):
+            return 'local_word_evidence', []
     return None, []
+
+
+def _weak_content_words(row: dict) -> list[dict]:
+    return [word for word in row.get('words', []) if word.get('probability', 1) < .42
+            and re.search(r'[一-鿿]', word['word'])]
+
+
+def _local_word_replacement(row: dict, passes: list[dict]) -> dict | None:
+    from .audio_review import closing_phrase
+    from .alignment_review import overlapping_words
+    from .word_boundaries import tokenizer
+    old = reading(row['text'])
+    opening_sound = re.match(r'^([あぁえぇんうぅはふへほっー]+)[?？!！…。、,\s]+', row['text'])
+    candidates = [(p['model'], focused(p['items'], row, p['left'])) for p in passes]
+    for (model_a, a), (model_b, b) in combinations(candidates, 2):
+        if not a or not b or not model_a or not model_b or model_a == model_b:
+            continue
+        new = reading(a['text'])
+        if (new == old or new != reading(b['text']) or key(a['text']) != key(b['text'])
+                or closing_phrase(a['text']) or overlapping_words(a['words']) or overlapping_words(b['words'])
+                or SequenceMatcher(None, old, new, autojunk=False).ratio() < .65):
+            continue
+        if opening_sound and not new.startswith(reading(opening_sound[1])):
+            continue
+        opening_token = next(iter(tokenizer().tokenize(row['text'].strip())), None)
+        if opening_token and len(new) >= 5:
+            # Both crops can begin inside the same word. Agreement on its suffix
+            # does not license deleting the missing syllable from the original.
+            inside = old.find(new[:5])
+            if 0 < inside < len(reading(opening_token.surface)):
+                continue
+        first_token = next(iter(tokenizer().tokenize(a['text'])), None)
+        if first_token and first_token.part_of_speech.startswith('助詞') and not row['text'].startswith(first_token.surface):
+            continue
+        first_a, first_b = a['words'][0], b['words'][0]
+        # A crop that starts after a complete opening cannot disprove it.
+        cut = min(first_a['start'], first_b['start']) - .25
+        prefix = ''.join(w['word'] for w in row.get('words', []) if w['end'] <= cut)
+        if key(prefix) and not new.startswith(reading(prefix)):
+            continue
+        start_agrees = (abs(first_a['start'] - first_b['start']) <= .6
+                        or key(first_a['word']) == key(first_b['word'])
+                        and abs(first_a['end'] - first_b['end']) <= .15
+                        and min(first_a['end'], first_b['end']) > max(first_a['start'], first_b['start']))
+        if not start_agrees or abs(a['words'][-1]['end'] - b['words'][-1]['end']) > .6:
+            continue
+        weak_words = _weak_content_words(row)
+        alignment_disagreement = row.get('alignment_review', {}).get('status') == 'uncertain'
+        if alignment_disagreement or any(all(h['words'][0]['start'] <= w['start'] + .4
+                                              and h['words'][-1]['end'] >= w['end'] - .4
+                                              for h in (a, b)) for w in weak_words):
+            return max((a, b), key=lambda h: h['words'][0]['start'])
+    return None
 
 
 def focused(items: list[dict], row: dict, left: float) -> dict | None:
@@ -192,6 +292,60 @@ def _aligned_ear_licking(expected: str, a: dict, b: dict) -> bool:
     return False
 
 
+def _word_intervals(words: list[dict], term: str) -> list[tuple[float, float]]:
+    text = ''.join(w['word'] for w in words)
+    offsets = []
+    cursor = 0
+    for word in words:
+        end = cursor + len(word['word'])
+        offsets.append((cursor, end, word))
+        cursor = end
+    intervals = []
+    for match in re.finditer(re.escape(term), text):
+        group = [word for start, end, word in offsets if end > match.start() and start < match.end()]
+        if group and word_confidence({'words': group}) >= .5:
+            intervals.append((group[0]['start'], group[-1]['end']))
+    return intervals
+
+
+def _confirmed_quiet_word(row: dict, hint: tuple[str, str], passes: dict) -> bool:
+    old, new = hint
+    if new not in {'あったかい', '好き', 'マゾ'}:
+        return False
+    old_intervals = _word_intervals(row.get('words', []), old)
+    if len(old_intervals) != row['text'].count(old) or not old_intervals:
+        return False
+    pools = {}
+    for label, alternatives in passes.items():
+        pools[label] = []
+        for evidence in alternatives:
+            items = [r for r in evidence['items'] if r.get('avg_logprob', -2) >= -.95
+                     and r.get('no_speech_prob', 1) < .4 and not artifact(r['text'])]
+            if new == 'あったかい' and not any('体温' in r['text'] for r in items):
+                continue
+            words = [{**w, 'start': w['start'] + evidence['left'], 'end': w['end'] + evidence['left']}
+                     for r in items for w in r.get('words', [])]
+            exact = _word_intervals(words, new)
+            intervals = exact
+            if new == 'あったかい':
+                intervals = exact + _word_intervals(words, 'はったかい')
+            intervals = [interval for interval in intervals if any(
+                min(interval[1], prior[1]) - max(interval[0], prior[0]) >= .25 for prior in old_intervals)]
+            if len(intervals) >= len(old_intervals):
+                pools[label].append((evidence['model'], sorted(intervals), bool(exact)))
+    overlap = lambda a, b: min(a[1], b[1]) - max(a[0], b[0]) >= .25
+    for name_a, a, exact_a in pools.get('primary', []):
+        for name_b, b, exact_b in pools.get('alternate', []):
+            if not name_a or not name_b or name_a == name_b or not (exact_a or exact_b):
+                continue
+            for aa in combinations(a, len(old_intervals)):
+                for bb in combinations(b, len(old_intervals)):
+                    if all(overlap(x, y) and overlap(x, z) and overlap(y, z)
+                           for x, y, z in zip(old_intervals, aa, bb)):
+                        return True
+    return False
+
+
 def confirmed_spellings(row: dict, hints: list, passes: dict, fallback_left: float) -> tuple:
     """Require distinct models to support each proposed word and the surrounding reading."""
     from .context_vocabulary import near_reading
@@ -201,6 +355,8 @@ def confirmed_spellings(row: dict, hints: list, passes: dict, fallback_left: flo
         pools[label] = [(p['model'], focused(p['items'], row, p.get('left', fallback_left))) for p in variants]
     for size in range(len(hints), 0, -1):
         for subset in combinations(hints, size):
+            if size == 1 and subset[0] in QUIET_PHRASE_HINTS and _confirmed_quiet_word(row, subset[0], passes):
+                return subset
             expected = row['text']
             for old, new in subset:
                 expected = expected.replace(old, new)
@@ -266,9 +422,17 @@ def confirmed_spellings(row: dict, hints: list, passes: dict, fallback_left: flo
     return ()
 
 
+def _review_policy(reason: str, hints: list):
+    if SERVICE_NEAR_SOUND_HINT in hints:
+        return 'service-near-sound-v1'
+    if set(hints) & QUIET_PHRASE_HINTS:
+        return 'quiet-phrase-interval-v1'
+    return VERSION if reason in {'closing_evidence', 'sparse_timing'} else 4
+
+
 def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[dict]:
     from . import cli as main
-    from .audio_review import ReviewRecognizer, decode_window, speech_seconds, closing_phrase, weak_closing
+    from .audio_review import ReviewRecognizer, decode_window, speech_seconds, closing_phrase, weak_closing, normalize_review_audio
     from .short_speech import alternate_available
     if cache.get('language') != 'ja' or config.get('quality', 'high') != 'high':
         return []
@@ -277,7 +441,7 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
         if row.get('audio_review', {}).get('status') == 'omitted':
             continue
         reason, hints = _selection(row, cache)
-        policy = VERSION if reason in {'closing_evidence', 'sparse_timing'} else 4
+        policy = _review_policy(reason, hints)
         signature = main.fingerprint([row['text'], row['start'], row['end'], hints, policy])
         previous = row.get('source_review', {})
         if not reason or previous.get('signature') == signature and not previous.get('waiting_for_alternate'):
@@ -295,6 +459,12 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
         review = {'version': VERSION, 'reason': reason, 'signature': signature, 'status': 'retained', 'passes': {}}
         if reason == 'decoration_only':
             review['status'] = 'omitted'
+        elif reason == 'contextual_homophones':
+            review['original_text'] = row['text']
+            for old, new in hints:
+                while old in row['text']:
+                    apply_spelling(row, old, new)
+            review['status'] = 'recovered'
         elif reason == 'cached_homophone':
             candidate = row['refinement']['alternate_recognized'][0]
             for old, new in hints:
@@ -303,6 +473,30 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
                     apply_spelling(row, old, new)
                     review['status'] = 'recovered'
                     break
+        elif reason == 'local_word_evidence':
+            review['status'] = 'unresolved'
+            passes = list(row.get('alignment_review', {}).get('passes', {}).values())
+            replacement = _local_word_replacement(row, passes)
+            if replacement is None and can_compare and _weak_content_words(row):
+                left, right = max(0, row['start'] - .8), row['end'] + .8
+                channels = {channel: normalize_review_audio(decode_window(source, left, right, channel=channel),
+                            peak_target=.25, max_gain=5, amplify_only=True) for channel in ('left', 'right')}
+                for alternate in (False, True):
+                    recognizer = ReviewRecognizer(config, alternate=alternate)
+                    try:
+                        for channel, audio in channels.items():
+                            items = recognizer.short_clip(audio)
+                            evidence = {'model': recognizer.model_name, 'items': items, 'left': left}
+                            review['passes'][f'{alternate}:{channel}'] = evidence
+                            passes.append(evidence)
+                    finally:
+                        recognizer.model = None
+                replacement = _local_word_replacement(row, passes)
+            if replacement:
+                review['original_text'] = row['text']
+                _apply(row, replacement)
+                review['status'] = 'recovered'
+            review['waiting_for_alternate'] = not can_compare and not replacement
         else:
             left, right = max(0, row['start'] - .8), row['end'] + .8
             audio = decode_window(source, left, right)
@@ -318,13 +512,20 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
                            and word_confidence(row) >= .75)
             suspect_closing = reason == 'closing_evidence' and not strong and (weak_closing(row, cache, speech)
                               or ratio < .25 and (row.get('gap_review') or initial.get('avg_logprob', 0) < -.65 or initial.get('no_speech_prob', 0) > .3))
-            if reason == 'closing_evidence' and not suspect_closing:
+            if (reason == 'closing_evidence' and row.get('gap_review') and row['end'] - row['start'] < .25
+                    and not speech and not speech_seconds(audio, threshold=.5)):
+                review['status'] = 'omitted'
+            elif reason == 'closing_evidence' and not suspect_closing:
                 pass
             elif can_compare:
-                prompt = '、'.join(sorted({target for _, target in hints}))
+                prompt = '、'.join(sorted({target for old, target in hints if (old, target) not in QUIET_PHRASE_HINTS}))
                 previous = row.get('source_review', {})
-                reusable = (reason == 'contextual_spelling' and previous.get('signature') ==
-                            main.fingerprint([row['text'], row['start'], row['end'], hints, 2])
+                quiet_hint = bool(set(hints) & QUIET_PHRASE_HINTS)
+                evidence_policies = [4] if quiet_hint else [2]
+                if SERVICE_NEAR_SOUND_HINT in hints:
+                    evidence_policies.append('quiet-phrase-interval-v1')
+                reusable = (reason == 'contextual_spelling' and previous.get('signature') in
+                            {main.fingerprint([row['text'], row['start'], row['end'], hints, policy]) for policy in evidence_policies}
                             and set(previous.get('passes', {})) == {'primary', 'alternate'})
                 if reusable:
                     review['passes'] = previous['passes']
@@ -369,8 +570,15 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
                     from .context_vocabulary import topic_evidence
                     review['topic_evidence'] = topic_evidence(row, cache['segments'])
                     pools = {label: [p] for label, p in review['passes'].items()}
+                    if reusable and quiet_hint:
+                        for field in ('retry_passes', 'channel_passes'):
+                            if field in previous:
+                                review[field] = previous[field]
+                        for saved in [review.get('retry_passes', {}), *review.get('channel_passes', {}).values()]:
+                            for label, evidence in saved.items():
+                                pools[label].append(evidence)
                     matched = confirmed_spellings(row, hints, pools, left)
-                    if len(matched) < len(hints):
+                    if len(matched) < len(hints) and 'retry_passes' not in review:
                         retry_left = max(0, row['start'] - 1.4)
                         retry_audio = decode_window(source, retry_left, row['end'] + 1.4)
                         review['retry_passes'] = {}
@@ -384,7 +592,7 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
                             finally:
                                 recognizer.model = None
                         matched = confirmed_spellings(row, hints, pools, left)
-                    if len(matched)<len(hints):
+                    if len(matched)<len(hints) and 'channel_passes' not in review:
                         import numpy as np
                         review['channel_passes']={}
                         for channel in ['left','right']:
@@ -402,6 +610,24 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
                                 finally:recognizer.model=None
                             matched=confirmed_spellings(row,hints,pools,left)
                             if len(matched)==len(hints):break
+                    if SERVICE_NEAR_SOUND_HINT in hints and SERVICE_NEAR_SOUND_HINT not in matched:
+                        import numpy as np
+                        clip_left = max(0, row['start'] - .4)
+                        channels = [decode_window(source, clip_left, row['end'] + 1.4, channel=channel)
+                                    for channel in ('left', 'right')]
+                        clip = max(channels, key=lambda audio: np.percentile(np.abs(audio), 99.5))
+                        clip = np.pad(normalize_review_audio(clip, peak_target=.3, max_gain=10, amplify_only=True), (3200, 3200))
+                        review['focused_passes'] = {}
+                        for label, alternate in [('primary', False), ('alternate', True)]:
+                            recognizer = ReviewRecognizer(config, alternate=alternate)
+                            try:
+                                items = recognizer.short_clip(clip)
+                                evidence = {'model': recognizer.model_name, 'items': items, 'left': clip_left - .2}
+                                review['focused_passes'][label] = evidence
+                                pools[label].append(evidence)
+                            finally:
+                                recognizer.model = None
+                        matched = confirmed_spellings(row, hints, pools, left)
                     if matched:
                         review['original_text'] = row['text']
                         review['confirmed_hints'] = list(matched)
@@ -428,7 +654,7 @@ def review_sources(source: Path, cache: dict, path: Path, config: dict) -> list[
         elif reason == 'closing_evidence':
             row['audio_review'] = {**row.get('audio_review', {}), 'version': 4, 'status': 'reviewed', 'closing_checked': True}
         # A successful recovery checkpoints its current source so the next run can reuse it.
-        policy = VERSION if reason in {'closing_evidence', 'sparse_timing'} else 4
+        policy = _review_policy(reason, hints)
         review['signature'] = main.fingerprint([row['text'], row['start'], row['end'], spelling_hints(row, cache['segments']) if reason == 'contextual_spelling' else [], policy])
         row['source_review'] = review
         changes.append({'id': row['id'], **review})

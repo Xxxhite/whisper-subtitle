@@ -6,7 +6,8 @@ from pathlib import Path
 import re
 import unicodedata
 
-VERSION = 2
+VERSION = 4
+STEREO_PADDING = .2
 
 
 def alternate_available(config: dict) -> bool:
@@ -41,15 +42,19 @@ def plan_candidates(segments: list[dict], speech: list[dict]) -> list[dict]:
     candidates = []
     for before, after in zip(rows, rows[1:]):
         start, end = before['end'], after['start']
-        if not .8 <= end - start <= 12 or not (lexical_speech(before['text']) or lexical_speech(after['text'])):
+        if not .8 <= end - start <= 120 or not (lexical_speech(before['text']) or lexical_speech(after['text'])):
             continue
+        long_gap = end - start > 12
+        padding = .7 if long_gap else 1.5
         windows = []
         for region in speech:
             left, right = max(start, region['start'] / 16000), min(end, region['end'] / 16000)
             if not .12 <= right - left <= 2.5 or min(left - start, end - right) < .35:
                 continue
-            window = {'kind': 'gap', 'left': max(start, left - 1.5), 'right': min(end, right + 1.5),
+            window = {'kind': 'gap', 'left': max(start, left - padding), 'right': min(end, right + padding),
                       'bounds': [start, end], 'speech': [left, right]}
+            if long_gap:
+                window['long_gap'] = True
             if windows and window['left'] < windows[-1]['right']:
                 windows[-1]['right'] = max(windows[-1]['right'], window['right'])
                 windows[-1]['speech'][1] = max(windows[-1]['speech'][1], right)
@@ -83,15 +88,48 @@ def plan_candidates(segments: list[dict], speech: list[dict]) -> list[dict]:
     return candidates
 
 
+def plan_stereo_gaps(source: Path, segments: list[dict], planned: list[dict]) -> list[dict]:
+    from faster_whisper.vad import get_speech_timestamps
+    from .audio_review import decode_window, lexical_speech
+
+    rows = sorted((r for r in segments if r.get('audio_review', {}).get('status') != 'omitted'),
+                  key=lambda row: row['start'])
+    covered = [w['speech'] for w in planned if w['kind'] == 'gap']
+    candidates = []
+    for before, after in zip(rows, rows[1:]):
+        left, right = before['end'], after['start']
+        if not 2.4 <= right - left <= 14 or not (lexical_speech(before['text']) or lexical_speech(after['text'])):
+            continue
+        regions = []
+        for channel in ('left', 'right'):
+            audio = decode_window(source, left, right, channel=channel)
+            speech = get_speech_timestamps(audio, threshold=.35, min_speech_duration_ms=140,
+                                           min_silence_duration_ms=140, speech_pad_ms=0)
+            for region in speech:
+                start = left + region['start'] / 16000
+                end = left + region['end'] / 16000
+                if .32 <= end - start <= 2.5 and not any(min(end, b) - max(start, a) >= .12 for a, b in covered):
+                    regions.append((start, end, channel))
+        distinct = []
+        for start, end, channel in sorted(regions, key=lambda r: (r[0]-r[1], r[0])):
+            if not any(min(end, b) - max(start, a) >= .12 for a, b, _ in distinct):
+                distinct.append((start, end, channel))
+        for start, end, channel in sorted(distinct):
+            candidates.append({'kind': 'gap', 'channel': channel, 'left': max(left, start - .7),
+                               'right': min(right, end + .7), 'bounds': [left, right], 'speech': [start, end]})
+    return candidates
+
+
 def hypothesis(items: list[dict], window: dict) -> dict | None:
     from .subtitle_processing import contains_emoji
     from .transcript_refinement import compact
     from .sakura import has_unexpected_repetition
     words, scores = [], []
+    offset = window['left'] - (STEREO_PADDING if window.get('channel') else 0)
     for row in items:
         chosen = []
         for word in row.get('words', []):
-            absolute = {**word, 'start': word['start'] + window['left'], 'end': word['end'] + window['left']}
+            absolute = {**word, 'start': word['start'] + offset, 'end': word['end'] + offset}
             if 'focus' not in window or absolute['end'] > window['focus'][0] - .15 and absolute['start'] < window['focus'][1] + .15:
                 chosen.append(absolute)
         if chosen:
@@ -103,7 +141,7 @@ def hypothesis(items: list[dict], window: dict) -> dict | None:
     avg = sum(r.get('avg_logprob', -2) for r in scores) / len(scores)
     no_speech = max(r.get('no_speech_prob', 1) for r in scores)
     probabilities = [w['probability'] for w in words if 'probability' in w and compact(w['word'])]
-    if avg < -1 or no_speech >= .6 or any(r.get('compression_ratio', 0) > 2.4 for r in scores):
+    if avg < (-1.15 if window.get('long_gap') else -1) or no_speech >= .6 or any(r.get('compression_ratio', 0) > 2.4 for r in scores):
         return None
     if not probabilities or sum(probabilities) / len(probabilities) < .35:
         return None
@@ -113,9 +151,14 @@ def hypothesis(items: list[dict], window: dict) -> dict | None:
 
 def confirmed(primary: dict | None, alternate: dict | None, window: dict) -> bool:
     from .audio_review import closing_phrase, lexical_speech
-    if not primary or not alternate or phonetic_key(primary['text']) != phonetic_key(alternate['text']):
+    if not primary or not alternate:
         return False
     key = phonetic_key(alternate['text'])
+    primary_key = phonetic_key(primary['text'])
+    laugh = (window.get('long_gap') and bool(re.fullmatch(r'ふ{2,3}っ?', key))
+             and primary_key.rstrip('っ') == key.rstrip('っ'))
+    if primary_key != key and not laugh:
+        return False
     if not key:
         return False
     if window['kind'] == 'internal':
@@ -133,14 +176,28 @@ def confirmed(primary: dict | None, alternate: dict | None, window: dict) -> boo
     if window['kind'] == 'existing':
         return SequenceMatcher(None, phonetic_key(window['source']), key, autojunk=False).ratio() >= .5
     if closing_phrase(alternate['text']):
-        return (window['speech'][1] - window['speech'][0] >= .5
+        return (not (window.get('long_gap') or window.get('channel')) and window['speech'][1] - window['speech'][0] >= .5
                 and all(h.get('no_speech_prob', 1) < .3 and h.get('avg_logprob', -2) > -.7 for h in (primary, alternate)))
     meaningful = lexical_speech(alternate['text']) or key in {'うん', 'はい', 'ううん', 'あれ', 'へえ'}
     meaningful |= key == 'ん' and all(any(c in h['text'] for c in '?？') for h in (primary, alternate))
+    meaningful |= bool(laugh) or bool(window.get('long_gap') and re.fullmatch(r'(?:うん){2,3}|うわ', key))
     if not meaningful:
         return False
     left, right = window['speech']
+    if window.get('channel') and max(primary['no_speech_prob'], alternate['no_speech_prob']) >= .3:
+        return False
+    if window.get('long_gap') and min(primary['avg_logprob'], alternate['avg_logprob']) < -1:
+        if (right - left < .25 or max(primary['avg_logprob'], alternate['avg_logprob']) < -1
+                or max(primary['no_speech_prob'], alternate['no_speech_prob']) >= .3):
+            return False
     return all(min(h['end'], right) - max(h['start'], left) >= .08 for h in (primary, alternate))
+
+
+def repeats_gap_neighbor(text: str, start: float, end: float, rows: list[dict]) -> bool:
+    key = phonetic_key(text)
+    return any((0 <= start - row['end'] <= .45 and phonetic_key(row['text']).endswith(key))
+               or (0 <= row['start'] - end <= .45 and phonetic_key(row['text']).startswith(key))
+               for row in rows if row.get('audio_review', {}).get('status') != 'omitted')
 
 
 def supplement(row: dict, recognized: dict, window: dict) -> bool:
@@ -234,34 +291,93 @@ def restore_omitted_speech(source: Path, cache: dict, path: Path, config: dict) 
         cli.save_json(path, cache)
 
 
+def restore_clipped_laughs(cache: dict, state: dict, path: Path) -> list[int]:
+    """Recover a removed opening only when both gap decoders and the original agree."""
+    from . import cli
+    from .subtitle_processing import sound_key
+    from .transcript_refinement import VERSION as refinement_version
+
+    passes = state.get('passes', {})
+    if not state.get('distinct_models') or not all(k in passes for k in ('primary', 'alternate')):
+        return []
+    rows = cache['segments']
+    added = []
+    for index, window in enumerate(state.get('candidates', [])):
+        if window['kind'] != 'gap' or not window.get('channel'):
+            continue
+        start, end = window['speech']
+        if end - start < .25 or any(r['start'] < end and r['end'] > start for r in rows):
+            continue
+        following = next((r for r in rows if abs(r['start'] - window['bounds'][1]) < .01
+                          and r.get('audio_review', {}).get('status') != 'omitted'), None)
+        if not following:
+            continue
+        original = following.get('source_review', {}).get('original_text', '')
+        opening = re.split(r'[、。！？!?…\s]', original, maxsplit=1)[0]
+        family = sound_key(opening)
+        if not family or not family.startswith('laugh:') or following['text'].startswith(opening):
+            continue
+        for label in ('primary', 'alternate'):
+            items = passes[label]['results'][index]
+            if len(items) != 1:
+                break
+            item = items[0]
+            words = [w for w in item.get('words', []) if not re.fullmatch(r'[wｗ]+', w['word'].strip())]
+            offset = window['left'] - STEREO_PADDING
+            if (sound_key(''.join(w['word'] for w in words)) != family
+                    or item.get('avg_logprob', -2) < -1.3 or item.get('no_speech_prob', 1) >= .6
+                    or not any(w.get('probability', 0) >= .6 and
+                               min(end, offset+w['end']) - max(start, offset+w['start']) >= .08 for w in words)):
+                break
+        else:
+            identifier = max([r['id'] for r in rows] + [int(k) for k in cache.get('refinement', {}).get('originals', {})]) + 1
+            rows.append({'id': identifier, 'start': start, 'end': end, 'text': opening,
+                         'words': [{'word': opening, 'start': start, 'end': end}],
+                         'short_review': {'status': 'recovered', 'candidate': index, 'kind': 'clipped_laugh'},
+                         'refinement': {'version': refinement_version, 'parent_id': identifier, 'status': 'unchanged',
+                                        'short_confirmed': True}})
+            added.append(identifier)
+    if added:
+        rows.sort(key=lambda r: (r['start'], r['end'], r['id']))
+        state.setdefault('added_ids', []).extend(added)
+        cli.save_json(path, cache)
+    return added
+
+
 def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dict) -> list[int]:
     from . import cli as main
-    from .audio_review import ReviewRecognizer, decode_window
+    from .audio_review import ReviewRecognizer, decode_window, normalize_review_audio
     from .transcript_refinement import VERSION as REFINEMENT_VERSION, _clear_translation
     if cache.get('language') != 'ja' or config.get('quality', 'high') != 'high' or main.asr_settings(config)['model'] != 'large-v2':
         return []
     restore_omitted_speech(source, cache, cache_path, config)
     state = cache.get('short_speech', {})
     if state.get('version') == VERSION and state.get('complete'):
-        return []
+        return restore_clipped_laughs(cache, state, cache_path)
     if not alternate_available(config):
         print('Short speech review skipped: a local turbo model is required for independent confirmation.', flush=True)
         return []
     if state.get('version') != VERSION:
         import av
         from faster_whisper.vad import get_speech_timestamps
-        with av.open(str(source)) as container:
+        with av.open(str(source), metadata_errors='replace') as container:
             duration = container.duration / av.time_base if container.duration else max(r['end'] for r in cache['segments'])
+            channels = container.streams.audio[0].channels if container.streams.audio else 0
+            stereo = isinstance(channels, int) and channels >= 2
         speech = get_speech_timestamps(decode_window(source, 0, duration), threshold=.35,
                                       min_speech_duration_ms=100, min_silence_duration_ms=100, speech_pad_ms=0)
         previous = state
         candidates = plan_candidates(cache['segments'], speech)
-        if previous.get('version') == 1 and previous.get('complete'):
-            candidates = [w for w in candidates if w['kind'] == 'internal']
+        stereo_candidates = plan_stereo_gaps(source, cache['segments'], candidates) if stereo else []
+        if previous.get('complete') and previous.get('version') in {1, 2, 3}:
+            candidates = [w for w in candidates if (previous['version'] < 3 and w.get('long_gap'))
+                          or (previous['version'] == 1 and w['kind'] == 'internal')]
+        candidates.extend(stereo_candidates)
         state = {'version': VERSION, 'candidates': candidates,
                  'passes': {}, 'applied': 0, 'added_ids': previous.get('added_ids', []),
                  'changed_ids': previous.get('changed_ids', []), 'complete': False}
-        backup = cache_path.with_name(f'task.before-short-review-v{VERSION}.json' if previous else 'task.before-short-review.json')
+        backup_version = 2 if previous.get('version') == 1 else VERSION
+        backup = cache_path.with_name(f'task.before-short-review-v{backup_version}.json' if previous else 'task.before-short-review.json')
         if not backup.exists():
             main.save_json(backup, cache)
         cache['short_speech'] = state
@@ -273,7 +389,18 @@ def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dic
             for index in range(len(progress['results']), len(state['candidates'])):
                 window = state['candidates'][index]
                 print(f"Checking short speech {index + 1}/{len(state['candidates'])} ({label}; {main.console_time(window['left'])})...", flush=True)
-                items = recognizer.timed(decode_window(source, window['left'], window['right']), 'ja')
+                if window.get('channel'):
+                    import numpy as np
+                    audio = decode_window(source, window['left'], window['right'], channel=window['channel'])
+                    padding = round(STEREO_PADDING * 16000)
+                    audio = np.pad(normalize_review_audio(audio, peak_target=.3, max_gain=10, amplify_only=True), (padding, padding))
+                    items = recognizer.short_clip(audio)
+                elif window.get('long_gap'):
+                    audio = decode_window(source, window['left'], window['right'])
+                    audio = normalize_review_audio(audio, peak_target=.25, max_gain=8, amplify_only=True)
+                    items = recognizer.short_clip(audio)
+                else:
+                    items = recognizer.timed(decode_window(source, window['left'], window['right']), 'ja')
                 progress['model'] = recognizer.model_name
                 progress['results'].append(items)
                 main.save_json(cache_path, cache)
@@ -293,7 +420,9 @@ def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dic
             if accepted:
                 start = max(window['bounds'][0], b['start'], window['speech'][0] - .35)
                 end = min(window['bounds'][1], max(b['end'], window['speech'][1] + .2))
-                if end > start and not any(min(end, row['end']) - max(start, row['start']) > .05 for row in cache['segments']):
+                occupied = any(min(end, row['end']) - max(start, row['start']) > .05 for row in cache['segments'])
+                repeat = window.get('channel') and repeats_gap_neighbor(b['text'], start, end, cache['segments'])
+                if end > start and not occupied and not repeat:
                     identifier = max([r['id'] for r in cache['segments']] + [int(k) for k in cache.get('refinement', {}).get('originals', {})]) + 1
                     evidence['status'] = 'recovered'
                     row = {**b, 'id': identifier, 'start': start, 'end': end, 'short_review': evidence,
@@ -331,5 +460,6 @@ def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dic
         state['applied'] = index + 1
         main.save_json(cache_path, cache)
     state['complete'] = True
+    restore_clipped_laughs(cache, state, cache_path)
     main.save_json(cache_path, cache)
     return state['added_ids'] + state['changed_ids']

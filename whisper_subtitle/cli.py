@@ -111,7 +111,15 @@ def atomic_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(text, encoding="utf-8")
-    temporary.replace(path)
+    for attempt in range(6):
+        try:
+            temporary.replace(path)
+            break
+        except PermissionError as exc:
+            # Windows readers (including indexing software) can briefly block replacement.
+            if getattr(exc, "winerror", None) not in (5, 32) or attempt == 5:
+                raise
+            time.sleep(.05 * 2 ** attempt)
 
 
 def save_json(path: Path, data: dict) -> None:
@@ -585,7 +593,7 @@ def generate_terms(source: Path, cache_path: Path, destination: Path, config: di
 
 
 def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter, progress: TranslationProgress) -> None:
-    from .sakura import GenerationLimitError, SakuraError, SakuraServer, UntranslatedError, validate_translations
+    from .sakura import GenerationLimitError, MeaningError, SakuraError, SakuraServer, UntranslatedError, validate_translations
     from .subtitle_processing import eligible_segments
 
     segments = eligible_segments(cache)
@@ -605,6 +613,11 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
             while offset < len(segments):
                 current_batch_size = 1 if offset < single_until else batch_size
                 batch = segments[offset:offset + current_batch_size]
+                # A partially confirmed phrase must not borrow the missing words from another line.
+                for index, segment in enumerate(batch):
+                    if segment.get("translation_fragment") and not segment.get("zh"):
+                        batch = batch[:index] if index else batch[:1]
+                        break
                 for segment in batch:
                     if segment.get("zh"):
                         show(segment)
@@ -612,16 +625,19 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                 if not pending:
                     offset += len(batch)
                     continue
-                context = segments[max(0, offset - config["translation"]["context_lines"]):offset]
-                history = [s["zh"] for s in context if s.get("zh")]
+                first_pending = offset + batch.index(pending[0])
+                context = segments[max(0, first_pending - config["translation"]["context_lines"]):first_pending]
+                history = [s["zh"] for s in context if s.get("zh") and not s.get("translation_fragment")]
+                if pending[0].get("translation_fragment"):
+                    history = []
                 for attempt in range(config["translation"]["max_retries"] + 1):
                     try:
                         source_lines = [source_text(s) for s in pending]
                         glossary = "\n".join(value for value in (config["sakura"]["glossary"].strip(), batch_glossary(pending)) if value)
-                        from .translation_checks import context_for
-                        source_context = context_for(pending[0], segments)
-                        translated = server.translate(source_lines, history, glossary, attempt=attempt, source_context=source_context)
-                        validate_translations(source_lines, translated)
+                        from .translation_checks import context_for, normalize_contextual_actions
+                        contexts = [context_for(segment, segments) for segment in pending]
+                        translated = server.translate(source_lines, history, glossary, attempt=attempt,
+                                                      source_context=contexts[0] if len(pending) == 1 else contexts)
                         if len(pending) > 1 and len(translated) != len(pending):
                             progress.message("Sakura line alignment changed; retrying this batch one entry per request.")
                             single_until = offset + len(batch)
@@ -630,6 +646,9 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                             raise SakuraError("Sakura returned no translated lines.")
                         if len(pending) == 1:
                             translated = [clean_text(" ".join(translated))]
+                        translated = [normalize_contextual_actions(source, text, context)
+                                      for source, text, context in zip(source_lines, translated, contexts)]
+                        validate_translations(source_lines, translated, source_context=contexts)
                         for segment, text in zip(pending, translated):
                             config["_rulebook"].store(segment, converter.convert(text), cache["language"])
                             segment.pop("needs_audio_review", None)
@@ -639,8 +658,8 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                         offset += len(batch)
                         break
                     except SakuraError as exc:
-                        if isinstance(exc, GenerationLimitError) and len(pending) > 1:
-                            progress.message("Sakura reached the output limit; retrying this batch one entry per request.")
+                        if isinstance(exc, (GenerationLimitError, MeaningError)) and len(pending) > 1:
+                            progress.message(f"{exc} Retrying this batch one entry per request.")
                             single_until = offset + len(batch)
                             break
                         if attempt == config["translation"]["max_retries"]:
@@ -698,7 +717,8 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
             for index, segment in enumerate(segments):
                 if not segment.get("zh"):
                     continue
-                history = [s.get("model_zh", s.get("zh", "")) for s in segments[max(0, index - options["context_lines"]):index]]
+                history = [s.get("model_zh", s.get("zh", "")) for s in segments[max(0, index - options["context_lines"]):index]
+                           if not s.get("translation_fragment")]
                 context = context_for(segment, segments)
                 if any(is_invalid_translation(text, source_text(segment), history=history, source_context=context)
                        for text in (segment.get("model_zh", segment["zh"]), segment["zh"])):
@@ -725,7 +745,7 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
         save_json(cache_path, cache)
     try:
         book = RuleBook.load(resolve_setting(config["dictionary_file"]), cleanup=config["format_cleanup"])
-        refreshed = book.prepare(cache)
+        refreshed = book.prepare(cache, partial_speech=options["backend"] == "sakura")
     except DictionaryError as exc:
         raise AppError(str(exc)) from exc
     config["_rulebook"] = book
@@ -995,7 +1015,7 @@ def run(args: argparse.Namespace) -> Path:
                     review_gaps(recognition_source, cache, cache_path, config)
                     review_task(recognition_source, cache, cache_path, config)
                     refine(recognition_source, cache, cache_path, config)
-                    trim_word_padding(cache, cache_path)
+                    trim_word_padding(cache, cache_path, source=recognition_source)
                     from .weak_sequence import review_weak_sequences
                     review_weak_sequences(recognition_source, cache, cache_path, config)
                     review_short_speech(recognition_source, cache, cache_path, config)

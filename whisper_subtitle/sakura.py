@@ -116,7 +116,10 @@ def translate_vocalization(text: str) -> str | None:
         return None
     if any(char not in {core[0], "\u3063", "\u30fc"} for char in folded):
         return None
-    return sounds[core[0]] * min(len(core), 4) + ("\u2026" if len(core) > 4 else "")
+    suffix = "\u2026" if len(core) > 4 else ""
+    if unicodedata.normalize("NFKC", text).rstrip().endswith("?"):
+        suffix += "\uff1f"
+    return sounds[core[0]] * min(len(core), 4) + suffix
 
 
 def has_prompt_echo(text: str, source: str) -> bool:
@@ -134,7 +137,7 @@ def has_prompt_echo(text: str, source: str) -> bool:
 
 
 def validate_translations(lines: list[str], translations: list[str], *,
-                          history: list[str] = (), source_context: str = "") -> None:
+                          history: list[str] = (), source_context: str | list[str] = "") -> None:
     from .subtitle_processing import contains_emoji
     aligned = len(lines) == len(translations)
     unchanged = [index for index, (source, target) in enumerate(zip(lines, translations))
@@ -146,11 +149,13 @@ def validate_translations(lines: list[str], translations: list[str], *,
     if has_prompt_echo("\n".join(translations), "\n".join(lines)):
         raise ContextLeakError("Sakura repeated translation instructions; the response was rejected.")
     pairs = zip(lines, translations) if len(lines) == len(translations) else [("\n".join(lines), "\n".join(translations))]
-    for source, translated in pairs:
+    for index, (source, translated) in enumerate(pairs):
+        context = source_context if isinstance(source_context, str) else source_context[index] if aligned else ''
         from .source_checks import artifact
         from .translation_checks import meaning_errors
-        if meaning_errors(source, translated, source_context):
-            raise MeaningError('Sakura changed a source relationship or clause type; the response was rejected.')
+        issues = meaning_errors(source, translated, context)
+        if issues:
+            raise MeaningError(f"Sakura changed the source meaning ({', '.join(issues)}); the response was rejected.")
         if contains_emoji(translated) and not contains_emoji(source):
             raise SakuraError("Sakura introduced emoji into the translation; the response was rejected.")
         if has_excessive_expansion(translated, source):
@@ -161,7 +166,7 @@ def validate_translations(lines: list[str], translations: list[str], *,
             raise ContextLeakError('Sakura replaced sound effects with unrelated counting; the response was rejected.')
         if has_unexpected_repetition(translated, source):
             raise ContextLeakError("Sakura repeated a long phrase absent from the source; the response was rejected.")
-        if has_history_leak(translated, source, history, source_context):
+        if has_history_leak(translated, source, history, context):
             raise ContextLeakError("Sakura included previous dialogue; the response was rejected.")
 
 
@@ -264,6 +269,18 @@ def relationship_guidance(lines: list[str], source_context: str = "") -> str:
     """Reinforce only grammar explicitly present in the current source."""
     source = '\n'.join(lines)
     notes = []
+    if '<partial_asr/>' in source_context:
+        notes.append('只翻译本句能听清的短语。保留省略的成分和未完的语气，不补写缺失的名词、主语或后续动作。')
+        if source.startswith(('に', 'を', 'が')):
+            notes.append('句首助词前的名词听不清，用省略号表示该成分，勿用人称代词代替。')
+        if source.endswith('だけで'):
+            notes.append('这里只听清了条件「光是……就……」，后半句留空。')
+    if '<uncertain_asr/>' in source_context:
+        notes.append('听写有歧义。紧贴本句，保持未说明的对象、人称和地点，以简短中文表达。')
+    if re.search(r'[飲呑]み込むだけで', source):
+        notes.append('「飲み込む／呑み込む」是主动动作，保留「光是吞下」的方向。')
+    if 'てもらえると思った' in source:
+        notes.append('保留原句省略的人称。可以用「以为能……」表达接受动作的意思。')
     if re.search(r'してあげたら', source):
         notes.append('\u8bed\u6cd5\u63d0\u793a\uff1a\u3042\u3052\u308b\u7684\u4e3b\u8bed\u63d0\u4f9b\u52a8\u4f5c\uff0c\u5bf9\u65b9\u63a5\u53d7\u52a8\u4f5c\u3002\u6839\u636e\u539f\u6587\u548c\u8bed\u5883\u786e\u5b9a\u4eba\u79f0\uff0c\u4fdd\u6301\u52a8\u4f5c\u65b9\u5411\u3002')
     if re.search(r'てもらいたい', source):
@@ -359,9 +376,12 @@ class SakuraServer:
             self.stop()
             raise
 
-    def translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int = 0, source_context: str = "") -> list[str]:
+    def translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int = 0, source_context: str | list[str] = "") -> list[str]:
         if self.process is None or self.process.poll() is not None:
             raise SakuraError("The local Sakura server is not running.")
+        contexts = [source_context] * len(lines) if isinstance(source_context, str) else source_context
+        if len(contexts) != len(lines):
+            raise SakuraError("Missing per-line source context.")
         sounds = [translate_vocalization(line) for line in lines]
         if lines and all(sound is not None for sound in sounds) and not glossary.strip():
             return sounds
@@ -374,24 +394,34 @@ class SakuraServer:
                     while end < len(lines) and not isolated[end]:
                         end += 1
                 translated = self.translate(lines[index:end], [] if isolated[index] else history, glossary,
-                                            attempt=attempt, source_context='' if isolated[index] else source_context)
+                                            attempt=attempt, source_context='' if isolated[index] else contexts[index:end])
                 if len(translated) != end - index:
-                    translated = [' '.join(self.translate([line], [], glossary, attempt=max(1, attempt), source_context=''))
-                                  for line in lines[index:end]]
+                    translated = [' '.join(self.translate([line], [], glossary, attempt=max(1, attempt), source_context=context))
+                                  for line, context in zip(lines[index:end], contexts[index:end])]
                 result.extend(translated)
                 index = end
             return result
         if any(isolated):
             history, source_context = [], ''
+            contexts = [''] * len(lines)
             from .subtitle_processing import kana_unit_key
             glossary = '\n'.join(entry for entry in glossary.splitlines()
                                  if '->' in entry and kana_unit_key(entry.split('->', 1)[0].strip()) in kana_unit_key(lines[0]))
-        active_source = source_context.strip()[-600:] if attempt == 0 else ""
+        if len(lines) == 1:
+            source_context = contexts[0]
+        if isinstance(source_context, str):
+            reference = source_context.strip()[-600:]
+        else:
+            reference = '\n'.join(f'第{i}行参考：{context[-240:]}' for i, context in enumerate(contexts, 1) if context)
+        active_source = reference if attempt == 0 else ""
         active_history = history if attempt == 0 and len(lines) > 1 else []
         try:
             return self._translate(lines, active_history, glossary, attempt=attempt, source_context=active_source,
                                    check_history=history if active_source else active_history, check_source_context=source_context)
         except ContextLeakError as exc:
+            if isinstance(exc, MeaningError) and len(lines) > 1:
+                # The caller checkpoints each successful single before trying the next.
+                raise
             if isinstance(exc, MeaningError) and len(lines) == 1 and attempt > 0:
                 clauses = re.findall(r'[^、，,。！？!?]+[、，,。！？!?]*', lines[0])
                 if (2 <= len(clauses) <= 4 and ''.join(clauses) == lines[0]
@@ -406,23 +436,27 @@ class SakuraServer:
             print("Sakura included reference text or unexpected repetition; retrying each entry without context.", flush=True)
             # One isolated retry per entry. Persistent failures use the caller's bounded retries.
             result = []
-            for line in lines:
+            for line, context in zip(lines, contexts):
                 sound = translate_vocalization(line) if not glossary.strip() else None
                 if sound is not None:
                     result.append(sound)
                     continue
-                translated = self._translate([line], [], glossary, attempt=max(1, attempt), source_context="", check_source_context=source_context)
+                translated = self._translate([line], [], glossary, attempt=max(1, attempt), source_context="", check_source_context=context)
                 result.append(" ".join(translated))
             return result
 
     def _translate(self, lines: list[str], history: list[str], glossary: str, *, attempt: int, source_context: str,
-                   check_history: list[str] | None = None, check_source_context: str | None = None) -> list[str]:
+                   check_history: list[str] | None = None, check_source_context: str | list[str] | None = None) -> list[str]:
         system = SYSTEM_PROMPT
         if source_context:
             system += "\n\n" + SOURCE_CONTEXT_PREFIX + "<reference_source>\n" + source_context + "\n</reference_source>"
         if history:
             system += "\n\n<reference_translations>\n" + "\n".join(history)[-600:] + "\n</reference_translations>"
-        guidance = relationship_guidance(lines, source_context if check_source_context is None else check_source_context)
+        context = source_context if check_source_context is None else check_source_context
+        contexts = [context] * len(lines) if isinstance(context, str) else context
+        notes = [relationship_guidance([line], line_context) for line, line_context in zip(lines, contexts)]
+        guidance = '\n'.join((f'第{i}行：' if len(lines) > 1 else '') + note
+                             for i, note in enumerate(notes, 1) if note)
         if guidance:
             system += "\n\n" + guidance
         user = ""
@@ -461,9 +495,8 @@ class SakuraServer:
         translated = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines)==len(translated):
             from .translation_checks import normalize_contextual_actions, normalize_participants
-            check_context = source_context if check_source_context is None else check_source_context
-            translated = [normalize_contextual_actions(source, normalize_participants(source, target), check_context)
-                          for source, target in zip(lines, translated)]
+            translated = [normalize_contextual_actions(source, normalize_participants(source, target), line_context)
+                          for source, target, line_context in zip(lines, translated, contexts)]
         validate_translations(lines, translated, history=history if check_history is None else check_history,
                               source_context=source_context if check_source_context is None else check_source_context)
         return translated

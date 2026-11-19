@@ -5,6 +5,7 @@ import re
 
 from .dictionary_rules import source_text
 from .subtitle_processing import contains_emoji, is_pure_emoji, sound_key
+from .translation_checks import uncertain_source
 
 
 def findings(cache: dict, exported: list[dict]) -> list[dict]:
@@ -24,12 +25,20 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
         if issue:
             add(row, 'source_' + issue, 'Malformed or nonlexical source text requires audio confirmation; excluded from final subtitles.', 'info')
         safety = row.get('source_review', {})
+        fragment = row.get('translation_fragment')
+        if fragment:
+            candidates = ', '.join(f"{e['model']}: {e['noun']}" for e in fragment['evidence'])
+            add(row, 'partially_translated_speech',
+                f"Only the agreed phrase at {fragment['start']:.2f}–{fragment['end']:.2f}s was translated. "
+                f"Disputed noun {fragment['noun']}. Alternatives: {candidates}")
         alignment=row.get('alignment_review',{})
         if alignment.get('status')=='recovered':
             add(row,'word_alignment_repaired','Two local models confirmed a weak boundary or collapsed tail correction; raw ASR is retained.','info')
         elif alignment.get('status')=='uncertain':
             add(row,'collapsed_alignment_uncertain','A weak opening or collapsed word tail remains unconfirmed; inspect this source region.')
-        if safety.get('status') == 'recovered':
+        if safety.get('status') == 'recovered' and safety.get('reason') == 'contextual_homophones':
+            add(row, 'source_spelling_normalized', 'The surrounding words disambiguated an identical reading; original ASR is retained.', 'info')
+        elif safety.get('status') == 'recovered':
             add(row, 'source_recovered', 'Acoustic source verification recovered or corrected this entry; original ASR is retained.', 'info')
         elif safety.get('status') == 'unresolved':
             add(row, 'source_verification_uncertain', 'Contextual spelling or audio checks did not provide sufficient agreement; inspect the retained source.')
@@ -92,6 +101,20 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, 'low_confidence_asr', 'Recognition scores suggest uncertain wording; review this audio region.')
         if refinement.get('status') == 'uncertain' and row.get('weak_sequence_review', {}).get('status') != 'recovered':
             add(row, 'uncertain_refinement', 'Local re-listening did not provide a reliable replacement; existing wording was retained.')
+        if row.get('zh') and uncertain_source(row):
+            candidates = [f"{p['model']} ({channel.split(':')[-1]}): " + ' '.join(i['text'] for i in p['items'])
+                          for channel, p in safety.get('passes', {}).items() if p.get('items')]
+            if not candidates:
+                candidates = [f"{refinement.get(model, label)}: " + ' '.join(i['text'] for i in refinement[label])
+                              for label, model in [('recognized', 'primary_model'), ('alternate_recognized', 'alternate_model')]
+                              if refinement.get(label)]
+            weak = [f"{w['word']} ({w['probability']:.2f})" for w in row.get('words', [])
+                    if w.get('probability', 1) < .42 and re.search(r'[一-鿿]', w['word'])]
+            detail = ['Independent recognition did not confirm the source wording.']
+            if weak:
+                detail.append('Weak tokens: ' + ', '.join(weak))
+            detail.extend(candidates)
+            add(row, 'translation_from_uncertain_source', ' | '.join(detail))
         if refinement.get('status') == 'revised':
             add(row, 'revised_asr', f"Local re-listening changed the source; parent ID: {refinement['parent_id']}; similarity: {refinement.get('similarity', 'unknown')}.",
                 'warning' if refinement.get('similarity', 1) < .85 else 'info')

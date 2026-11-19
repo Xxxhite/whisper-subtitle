@@ -31,12 +31,74 @@ def climax_with_partner(source: str, context: str) -> bool:
 
 
 def normalize_contextual_actions(source: str, target: str, context: str) -> str:
-    """Clarify an isolated literal movement phrase when the source context fixes its meaning."""
+    """Preserve actions and their participants when the source fixes their meaning."""
+    if '<partial_asr/>' in context and source.endswith('だけで'):
+        target = re.sub(r'^(?:只是|仅仅是|仅是|只)(.+?)(?:而已|罢了)[。.…\s]*$', r'光是\1就……', target)
+    if '<partial_asr/>' in context and re.match(r'に(?:注|そそ)ぐ', source):
+        target = re.sub(r'(?:倾[泻泄]|喷涌|奔涌)而出', '往……里倒', target)
+    if omitted_provider(source, context) and re.search(r'(?:優|やさ)しく言ってもらえると思った', source):
+        target = re.sub(r'(?:我)?((?:还)?以为)[他她]会(?:很|更)?温柔地?(?:对我|跟我|和我)(?:说话|说)',
+                        r'\1能听到温柔的话', target)
     if climax_with_partner(source, context):
         motion = r'一起[去走]' if re.search(r'行って.{0,12}一緒に', source) else r'一起走'
         target = re.sub(motion + r'(?=(?:吧|啦|吗|嘛|了)?(?:[。！？?？，、.…\s]|$))', '一起高潮', target)
         if re.search(r'行って.{0,12}一緒に', source):
             target = re.sub(r'[去走](?=(?:吧|啦|吗|嘛|了)?[，、,.…\s]+(?:和|跟|与)[我你]一起)', '高潮', target)
+    target = normalize_countdown_climax(source, target, context)
+    target = normalize_sleepy_expression(source, normalize_ear_preference(source, target, context))
+    return normalize_service_translation(source, target, context)
+
+
+def normalize_countdown_climax(source: str, target: str, context: str) -> str:
+    normalized = unicodedata.normalize('NFKC', source)
+    if (not re.search(r'(?:行|い)(?:く|きそう|きま[ー〜～]?す|っちゃう|きそうだった)', normalized)
+            or re.search(r'学校|会社|病院|公園|駅|旅行|仕事|歩いて|帰って|へ行|に行く|私行くから', normalized)):
+        return target
+    direct = re.search(r'(?:行|い)きそう.{0,14}出ます', normalized) and re.search(r'マゾ|しご|白い', context)
+    countdown = re.search(r'(?:[0-9]{1,2}[、,\s]+){2,}[0-9]{1,2}', normalized)
+    supported_countdown = countdown and re.search(r'白い[のあ]|しごい|乳首|射精', context)
+    if not (direct or supported_countdown or climax_context(context)):
+        return target
+    target = re.sub(r'((?:快)?要)去(?=了|吗|嗎|呢|啊|呀|要去|[、，。？?！!…\s]|$)', r'\1高潮', target)
+    if supported_countdown or re.search(r'(?:(?:行|い)く[、\s]*){2,}', normalized):
+        target = re.sub(r'去了(?=去了|要高潮|[、，。？?！!…\s]|$)', '高潮了', target)
+    if supported_countdown and re.search(r'(?:行|い)く\?\s*(?:行|い)っちゃう', normalized):
+        target = re.sub(r'要开始(?=了|吗|嗎|[、，。？?！!…\s]|$)', '要高潮', target)
+    return target
+
+
+def normalize_service_translation(source: str, target: str, context: str) -> str:
+    if re.search(r'リベンジ[?？]', source) and 'また来' in source and not re.search(r'報復|復讐|仕返し', source):
+        target = re.sub(r'(?:复仇|復仇|报仇|報仇|雪耻|雪恥)(?=[?？])', '再挑战一次', target, count=1)
+    if re.search(r'[0-9０-９一二三四五六七八九十百千]+万円', source) and '日元' not in target and '日圆' not in target:
+        if len(re.findall(r'万(?:元|块|塊)', target)) == 1:
+            target = re.sub(r'万(?:元|块|塊)', '万日元', target)
+    if ('私のこと' in source and 'おかずに使って' in source
+            and re.search(r'抜くの我慢|手でしこ|ちくび', source + '\n' + context)):
+        target = re.sub(r'下酒菜|配菜', '幻想对象', target, count=1)
+    if (re.fullmatch(r'(?:(?:行く|いく)[、。…\s]*){2,}', source)
+            and re.search(r'白いの[が、\s]*出', context)):
+        target = re.sub(r'(?:去吧[、。…，,\s]*){2,}', lambda match: '要出来了……' * match[0].count('去吧'), target, count=1)
+    return target
+
+
+def normalize_sleepy_expression(source: str, target: str) -> str:
+    if re.search(r'顔[、を\s]*(?:とろ[ー〜～]?ん|トロ[ー〜～]?ン)ってして[るい].{0,8}眠', source):
+        target = re.sub(r'(?:你的)?脸(?:都|快|快要|已经)?(?:融化|化掉)了?', '神情迷迷糊糊的', target, count=1)
+    return target
+
+
+def normalize_ear_preference(source: str, target: str, context: str) -> str:
+    preference = r'君[、,\s]*(?:は)?[、,\s]*ほんと[うー]?に?好き(?:だね|ね)'
+    desired_action = r'耳(?:を)?(?:舐め|なめ)(?:して)?(?:ほしい|欲しい)'
+    if re.search(preference + r'[。…、\s]+[^。！？!?]{0,24}' + desired_action, source):
+        target = re.sub(r'我(?:真的|真|很|好|非常|最){0,3}(?:喜欢|喜歡)你[呢啊呀哦喔]?(?=[。！？!?，,；;…\s]|$)',
+                        '你真的很喜欢被舔耳朵呢', target, count=1)
+    before = context.split('<following_source>', 1)[0]
+    if (re.search(r'大好きな耳(?:舐め|なめ)で[、,\s]*寝かしつけてあげる', source)
+            and not re.search(r'(?:私|わたし|僕|ぼく|俺)の?', source)
+            and re.search(preference + r'[^\n]{0,30}' + desired_action, before)):
+        target = re.sub(r'我((?:最|很|非常)?(?:喜欢|喜歡|爱|愛)的)(?=舔耳)', r'你\1', target, count=1)
     return target
 
 
@@ -69,8 +131,19 @@ def normalize_participants(source: str, target: str) -> str:
     return target
 
 
+def uncertain_source(row: dict) -> bool:
+    review = row.get('source_review', {})
+    refinement = row.get('refinement', {})
+    return bool(review.get('status') == 'unresolved' and review.get('reason') == 'local_word_evidence'
+                or review.get('status') != 'recovered' and refinement.get('status') == 'uncertain'
+                and refinement.get('alternate_recognized'))
+
+
 def context_for(row: dict, rows: list[dict]) -> str:
+    if row.get('translation_fragment'):
+        return '<partial_asr/>'
     from .audio_review import preceding_context
+    rows = [r for r in rows if not r.get('translation_fragment')]
     before=preceding_context(row,rows)
     following=[r['text'] for r in rows if row['end']<=r['start']<=row['end']+10 and r['id']!=row['id']
                and r.get('audio_review',{}).get('status')!='omitted'][:1]
@@ -80,11 +153,41 @@ def context_for(row: dict, rows: list[dict]) -> str:
     if re.search(r'行[くこきっ]|い[くこきっけ]',row['text']) and climax_context(history):
         terms=sorted(set(re.findall(r'おちんぽ|ちんちん|おまんこ|精液|射精|エッチ|気持ち|舐|我慢|興奮|挿入|中に[出来]|腰を',history)))
         before+='\n<topic_terms>'+','.join(terms)+'</topic_terms>'
+    if uncertain_source(row):
+        before += '\n<uncertain_asr/>'
     return before
+
+
+def omitted_provider(source: str, context: str) -> bool:
+    return bool(re.search(r'てもらえると思った', source) and re.search(r'お兄さん|お客様|あなた|君', context)
+                and not re.search(r'彼|あの人|その人|友達|先生|先輩|母|父|妹|姉|弟|兄(?!さん)', source + '\n' + context))
 
 
 def meaning_errors(source: str, target: str, context: str = '') -> list[str]:
     errors = []
+    if '<partial_asr/>' in context:
+        if (source.startswith(('に', 'を', 'が')) and not re.search(r'私|君|僕|俺|あなた|彼|さん|先生|相手', source)
+                and re.search(r'(?:于|给|对|向|往|朝|为|让|使|跟|和|把|被)[你您我他她]|[你您我他她]的|^[你您我他她]', target)):
+            errors.append('invented_participant_in_partial_speech')
+        if source.endswith('だけで') and re.search(r'(?:而已|罢了)[。.…\s]*$', target):
+            errors.append('unfinished_condition_translated_as_complete')
+        if re.match(r'に(?:注|そそ)ぐ', source) and re.search(r'(?:倾[泻泄]|喷涌|奔涌)而出', target):
+            errors.append('destination_changed_to_outflow')
+    if ('<uncertain_asr/>' in context and re.search(r'足球|サッカー', source)
+            and not re.search(r'場|フィールド|スタジアム|ピッチ', source) and re.search(r'球场|球場', target)):
+        errors.append('uncertain_noun_expanded_to_venue')
+    if re.search(r'[飲呑]み込むだけで', source) and re.search(r'被[^，。！？]{0,5}吞', target):
+        errors.append('active_swallow_changed_to_passive')
+    if omitted_provider(source, context) and re.search(r'[他她]会[^，。！？]{0,12}(?:对我|给我|帮我)', target):
+        errors.append('omitted_provider_assigned_third_person')
+    if normalize_countdown_climax(source, target, context) != target:
+        errors.append('contextual_climax_translated_as_motion')
+    if normalize_ear_preference(source, target, context) != target:
+        errors.append('listener_preference_changed_to_speaker')
+    if normalize_sleepy_expression(source, target) != target:
+        errors.append('sleepy_expression_translated_as_melting')
+    if normalize_service_translation(source, target, context) != target:
+        errors.append('contextual_service_meaning_changed')
     if progressive_action_clause(source) and re.search(r'不只是|不仅|不光|除了', target):
         errors.append('progressive_action_changed_to_added_clause')
     if favorite_ear_action(source) and re.search(r'喜欢的耳朵(?!按摩|清洁|护理)', target):

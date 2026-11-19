@@ -9,6 +9,32 @@ VERSION=1
 POLICY='complete-word-tails-v5'
 
 
+def overlapping_words(words: list[dict]) -> bool:
+    return any(a['end'] - b['start'] > .05 for a, b in zip(words, words[1:]))
+
+
+def supported_clause_splice(row: dict, hypotheses: list[dict]) -> list[dict] | None:
+    """Replace a complete final clause when both models agree at the same boundary."""
+    primary, alternate = hypotheses
+    if (reading(primary['text']) != reading(alternate['text'])
+            or overlapping_words(primary['words']) or overlapping_words(alternate['words'])):
+        return None
+    starts = [h['words'][0]['start'] for h in hypotheses]
+    ends = [h['words'][-1]['end'] for h in hypotheses]
+    if max(starts) - min(starts) > .5 or max(ends) - min(ends) > .8:
+        return None
+    for index, word in enumerate(row['words'][:-1], 1):
+        if not word['word'].rstrip().endswith(('。', '?', '？', '!', '！')):
+            continue
+        old_tail = reading(''.join(w['word'] for w in row['words'][index:]))
+        if (min(starts) >= word['end'] and max(starts) <= row['words'][index]['start'] + 1
+                and len(old_tail) >= 4 and reading(primary['text']).startswith(old_tail[:4])):
+            prefix = row['words'][:index]
+            if not overlapping_words(prefix):
+                return prefix + copy.deepcopy(primary['words'])
+    return None
+
+
 def compact(text: str) -> str:
     return ''.join(c for c in text if c.isalnum() or c=='ー')
 
@@ -144,15 +170,37 @@ def review_alignment(source: Path,cache: dict,path: Path,config: dict) -> None:
     selected=[]
     for row in cache['segments']:
         if row.get('audio_review',{}).get('status')=='omitted':continue
+        old = row.get('alignment_review', {})
+        if (old.get('status') == 'recovered' and old.get('borrowed_word_removed') is False
+                and not old.get('splice_rechecked') and overlapping_words(row.get('words', []))):
+            selected.append((row, None, None))
+            continue
         window=plan(row,cache['segments'])
         if not window:continue
         signature=cli.fingerprint([VERSION,POLICY,row['text'],row['start'],row['end'],row['words']])
         if row.get('alignment_review',{}).get('signature')==signature:continue
         selected.append((row,window,signature))
     if not selected:return
-    backup=path.with_name('task.before-alignment-review-v1.json')
+    backup=path.with_name('task.before-alignment-splice-recheck.json' if any(w is None for _, w, _ in selected)
+                          else 'task.before-alignment-review-v1.json')
     if not backup.exists():cli.save_json(backup,cache)
     for row,w,signature in selected:
+        if w is None:
+            old = row['alignment_review']
+            passes = list(old['passes'].values())
+            hypotheses = [usable(p['items'], p['left']) for p in passes]
+            replacement = (supported_clause_splice(row, hypotheses) if len(passes) == 2
+                           and passes[0]['model'] != passes[1]['model'] and all(hypotheses) else None)
+            if replacement:
+                row.update(words=replacement, text=''.join(x['word'] for x in replacement).strip(),
+                           end=replacement[-1]['end'])
+                _clear_translation(row)
+            else:
+                old['status'] = 'uncertain'
+            old['splice_rechecked'] = True
+            old['signature'] = cli.fingerprint([VERSION,POLICY,row['text'],row['start'],row['end'],row['words']])
+            cli.save_json(path,cache)
+            continue
         print(f"Checking word alignment #{row['id']} ({cli.console_time(row['start'])})...",flush=True)
         details={'version':VERSION,'signature':signature,'status':'uncertain','passes':{}}
         old=row.get('alignment_review',{})
@@ -195,11 +243,15 @@ def review_alignment(source: Path,cache: dict,path: Path,config: dict) -> None:
                     same_word=(reading(''.join(w['word'] for w in row['words'][index:]))==reading(text)
                                or borrowed_partial(row,index,h,cache['segments']))
                     if previous and (borrowed and same_word or not borrowed and not any(min(r['end'],end)-max(r['start'],start)>.12 for r in following)):
-                        row.setdefault('original_asr',{k:row[k] for k in ['text','start','end']})
-                        row['words']=previous if borrowed else previous+copy.deepcopy(candidate['words'])
-                        row['text']=''.join(x['word'] for x in row['words']).strip()
-                        row['end']=row['words'][-1]['end'];_clear_translation(row)
-                        details.update(status='recovered',borrowed_word_removed=borrowed)
+                        joined = previous if borrowed else previous + copy.deepcopy(candidate['words'])
+                        if overlapping_words(joined):
+                            joined = supported_clause_splice(row, h)
+                        if joined and not any(min(r['end'], joined[-1]['end']) - max(r['start'], joined[0]['start']) > .12 for r in following):
+                            row.setdefault('original_asr',{k:row[k] for k in ['text','start','end']})
+                            row['words']=joined
+                            row['text']=''.join(x['word'] for x in row['words']).strip()
+                            row['end']=row['words'][-1]['end'];_clear_translation(row)
+                            details.update(status='recovered',borrowed_word_removed=borrowed)
                 elif index and borrowed_partial(row,index,h,cache['segments']):
                     row.setdefault('original_asr',{k:row[k] for k in ['text','start','end']})
                     row['words']=row['words'][:index];row['text']=''.join(x['word'] for x in row['words']).strip()

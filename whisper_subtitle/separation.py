@@ -54,7 +54,7 @@ def wav_info(path: Path) -> tuple[int, int, int]:
 def extract_audio(source: Path, destination: Path) -> None:
     import av
 
-    with av.open(str(source)) as container, wave.open(str(destination), "wb") as output:
+    with av.open(str(source), metadata_errors='replace') as container, wave.open(str(destination), "wb") as output:
         if not container.streams.audio:
             raise SeparationError("The media file has no audio stream.")
         output.setparams((2, 2, 44100, 0, "NONE", "not compressed"))

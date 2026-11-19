@@ -50,7 +50,7 @@ def reliable_alignment(row: dict) -> bool:
             and compact(''.join(w['word'] for w in words)) == compact(row['text']))
 
 
-def trim_word_padding(cache: dict, path: Path) -> None:
+def trim_word_padding(cache: dict, path: Path, *, source: Path | None = None) -> None:
     """Keep a reliable subtitle close to its aligned words when the decoder adds long padding."""
     from . import cli
 
@@ -69,6 +69,22 @@ def trim_word_padding(cache: dict, path: Path) -> None:
         stretched_vocal = (bool(re.fullmatch(r'([あいうえおん])\1{1,8}', compact(row['text'])))
                            and compact(''.join(w['word'] for w in timed)) == compact(row['text'])
                            and words[-1]['end'] - timed[-1]['end'] >= 10)
+        short_vocal = (source is not None and cache.get('language') == 'ja'
+                       and re.fullmatch(r'([ぁ-ゖァ-ヺ])\1{1,8}', compact(row['text']))
+                       and max(w['end'] - w['start'] for w in timed) >= 10)
+        if short_vocal:
+            from faster_whisper.vad import get_speech_timestamps
+            from .audio_review import decode_window
+            audio = decode_window(source, row['start'], row['end'])
+            speech = get_speech_timestamps(audio, threshold=.5, min_speech_duration_ms=100,
+                                           min_silence_duration_ms=100, speech_pad_ms=0)
+            if speech:
+                start = speech[0]['start'] / 16000
+                end = speech[-1]['end'] / 16000
+                if .8 <= end - start <= 5 and max(start, row['end'] - row['start'] - end) >= 8:
+                    corrections.append((row, row['start'] + max(0, start - .15),
+                                        min(row['end'], row['start'] + end + .15)))
+                    continue
         if not aligned and not stretched_vocal:
             continue
         start, end = words[0]['start'], (timed[-1]['end'] if stretched_vocal else words[-1]['end'])
@@ -232,8 +248,10 @@ def original_segments(cache: dict) -> list[dict]:
     originals = cache.get('refinement', {}).get('originals', {})
     result, seen = [], set()
     for row in cache['segments']:
-        if row.get('sound_review'):
-            continue  # A confirmed gap sound is added after the original transcription.
+        count = row.get('count_review', {})
+        if (row.get('sound_review') or row.get('short_review', {}).get('kind') == 'clipped_laugh'
+                or count.get('split_from') or count.get('evidence', {}).get('window', {}).get('kind') == 'sequence_gap'):
+            continue  # These entries were recovered after the original transcription.
         details = row.get('refinement', {})
         for identifier in details.get('parent_ids', [details.get('parent_id', row['id'])]):
             parent = str(identifier)
@@ -246,7 +264,7 @@ def original_segments(cache: dict) -> list[dict]:
 
 
 def _clear_translation(row: dict) -> None:
-    for key in ('zh', 'model_zh', 'translation_text', 'rule_input_signature', 'rule_matches', 'glossary_terms', 'format_normalized'):
+    for key in ('zh', 'model_zh', 'translation_text', 'translation_fragment', 'rule_input_signature', 'rule_matches', 'glossary_terms', 'format_normalized'):
         row.pop(key, None)
 
 
@@ -541,6 +559,7 @@ def refine(source: Path, cache: dict, cache_path: Path, config: dict) -> list[in
                 before = max((r['end'] for r in cache['segments'] if r['id'] != parent['id'] and r['end'] <= focus['start']), default=0)
                 after = min((r['start'] for r in cache['segments'] if r['id'] != parent['id'] and r['start'] >= focus['end']), default=focus['end'] + .3)
                 left, right = max(before, focus['start'] - .3, 0), min(after, focus['end'] + .3)
+                review['window_start'] = left
                 recognized = recognizer.timed(decode_window(source, left, right), cache['language'])
                 replacement = _reviewed(focus, recognized, left)
                 changes_source = replacement and compact(replacement['text']) != compact(focus['text'])

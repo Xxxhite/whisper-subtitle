@@ -24,23 +24,25 @@ def number(text: str, *, counting: bool = False) -> int | None:
 
 def sessions(rows: list[dict]) -> list[tuple[float, float]]:
     """Bound a declared count by an explicit zero or eight minutes."""
-    result, active = [], None
+    result, active, deadline = [], None, 0
     for row in sorted(rows, key=lambda r: (r['start'], r['end'])):
         if row.get('audio_review', {}).get('status') == 'omitted':
             continue
         text = unicodedata.normalize('NFKC', row['text'])
-        declaration = bool(re.search(r'数え(?:ていく|てから|るね|ます|ていき)|カウント(?:する|します|していく)', text))
-        if active is not None and row['start'] > active + 480:
-            result.append((active, active + 480))
+        declaration = bool(re.search(r'数え(?:ていく|てから|るね|ます|ていき)|カウント(?:ダウン)?(?:だけ)?(?:する|します|していく|(?:を)?やり直し)', text))
+        if active is not None and row['start'] > deadline:
+            result.append((active, deadline))
             active = None
         if declaration and active is None:
             active = row['end']
+        if declaration:
+            deadline = row['end'] + 480
         if active is not None and row['start'] >= active:
             if number(text, counting=True) == 0 or re.search(r'(?:数え|カウント).{0,5}(?:やめ|止め|終わ)', text):
                 result.append((active, row['end']))
                 active = None
     if active is not None:
-        result.append((active, active + 480))
+        result.append((active, deadline))
     return result
 
 

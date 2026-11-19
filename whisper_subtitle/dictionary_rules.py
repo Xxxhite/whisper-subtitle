@@ -132,7 +132,7 @@ class RuleBook:
                     covered[start:end] = [True] * (end - start)
         return selected
 
-    def prepare(self, cache: dict) -> int:
+    def prepare(self, cache: dict, *, partial_speech: bool = False) -> int:
         refreshed = 0
         for row in cache["segments"]:
             working = row["text"]
@@ -145,6 +145,15 @@ class RuleBook:
             for rule in self.match_glossary(working, cache["language"]):
                 terms.append({key: rule.get(key, "") for key in ("source", "target", "note")})
                 hits["glossary"].append(rule["id"])
+            fragment = None
+            if partial_speech and cache["language"] == "ja" and not hits["pre"] and not terms:
+                from .translation_evidence import supported_fragment
+                fragment = supported_fragment(row, cache["segments"])
+            if fragment:
+                working = fragment["source"]
+                row["translation_fragment"] = fragment
+            else:
+                row.pop("translation_fragment", None)
             signature = _signature({"source": working, "terms": terms})
             previous = row.get("rule_input_signature")
             changed = previous != signature if previous is not None else working != row["text"] or bool(terms)
@@ -159,7 +168,7 @@ class RuleBook:
 
     def store(self, row: dict, text: str, language: str) -> None:
         row["model_zh"] = text
-        original = source_text(row)
+        original = row['text'] if row.get('translation_fragment') else source_text(row)
         result = text
         hits = row.setdefault("rule_matches", {"pre": [], "glossary": [], "post": []})
         hits["post"] = []
@@ -173,7 +182,7 @@ class RuleBook:
                 hits["post"].append(rule["id"])
         cleaned = normalize_translation(result, original) if self.cleanup else result
         row["format_normalized"] = cleaned != result
-        row["zh"] = cleaned
+        row["zh"] = cleaned + "〔部分听不清〕" if row.get("translation_fragment") else cleaned
 
 
 def batch_glossary(rows: list[dict]) -> str:
