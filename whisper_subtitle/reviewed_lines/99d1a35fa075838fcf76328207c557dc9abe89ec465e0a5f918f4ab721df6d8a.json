@@ -1,0 +1,123 @@
+[
+  {
+    "kind": "gap",
+    "id": "reviewed-opening-158",
+    "opening_for": 158,
+    "start": 1061.0,
+    "end": 1062.92,
+    "source": "（笑）",
+    "zh": "（笑）"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-opening-226",
+    "opening_for": 226,
+    "start": 1465.22,
+    "end": 1466.88,
+    "source": "（笑）",
+    "zh": "（笑）"
+  },
+  {
+    "kind": "timing",
+    "id": 226,
+    "asr": "いいの?こんなんにしちゃって…後で辛くなっても知らないよ、私",
+    "match_span": [
+      1465.22,
+      1473.72
+    ],
+    "speech_span": [
+      1466.88,
+      1473.72
+    ]
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-310-san",
+    "start": 1740.46,
+    "end": 1741.54,
+    "source": "3",
+    "zh": "3"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-310-ni",
+    "start": 1741.54,
+    "end": 1742.84,
+    "source": "2",
+    "zh": "2"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-310-ichi",
+    "start": 1744.0,
+    "end": 1744.54,
+    "source": "1",
+    "zh": "1"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-631-kyuu",
+    "start": 4070,
+    "end": 4071.4,
+    "source": "9",
+    "zh": "9"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-631-hachi",
+    "start": 4073.0,
+    "end": 4074.02,
+    "source": "8",
+    "zh": "8"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-631-nana",
+    "start": 4074.73,
+    "end": 4076.21,
+    "source": "7",
+    "zh": "7"
+  },
+  {
+    "id": 631,
+    "asr": "9、8、7、くにくに、かりかり。",
+    "match_span": [
+      4073.2,
+      4080.4
+    ],
+    "source": "くにくに、かりかり。",
+    "zh": "揉捏，抠抓。",
+    "speech_span": [
+      4077.4,
+      4080.4
+    ]
+  },
+  {
+    "kind": "unsupported",
+    "id": 653,
+    "asr": "8",
+    "match_span": [
+      4222.66,
+      4224.06
+    ],
+    "reason": "原时段缺乏「8」的发声证据。人工在后面的 70:28 附近只听到一次「はち」，已单独定位。"
+  },
+  {
+    "kind": "gap",
+    "id": "reviewed-653-hachi",
+    "start": 4228.0,
+    "end": 4228.94,
+    "source": "8",
+    "zh": "8"
+  },
+  {
+    "kind": "unsupported",
+    "id": 654,
+    "asr": "7",
+    "match_span": [
+      4232.12,
+      4233.52
+    ],
+    "reason": "人工复听此段只有较早的一次「はち」。此处局部复听只辨出气声或鼻音，背景水声可能干扰识别。"
+  }
+]

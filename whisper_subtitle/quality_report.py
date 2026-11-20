@@ -10,6 +10,7 @@ from .translation_checks import uncertain_source
 
 def findings(cache: dict, exported: list[dict]) -> list[dict]:
     result = []
+    restored_openings = {row["opening_for"] for row in exported if row.get("reviewed_gap") and "opening_for" in row}
     def add(row, issue, detail, severity="warning"):
         hits = row.get("rule_matches", {})
         result.append({"id": row["id"], "start": row["start"], "end": row["end"],
@@ -34,6 +35,10 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, "reviewed_speech_span", f"Reviewed speech interval: {start:.2f} to {end:.2f} seconds.", "info")
         fragment = row.get('translation_fragment')
         if fragment:
+            if fragment.get("reviewed_omission") or fragment.get("reviewed_duplicate"):
+                issue = "reviewed_" + fragment.get("reviewed_omission", "duplicate")
+                add(row, issue, fragment["reason"], "info")
+                continue
             mode = fragment.get("mode", "partial")
             evidence = " | ".join(f"{e['model']}: {e.get('text', e.get('noun', ''))}" for e in fragment["evidence"])
             reason = fragment.get("reason") or f"Disputed noun: {fragment.get('noun', '')}."
@@ -57,6 +62,15 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, 'source_spelling_normalized', 'The surrounding words disambiguated an identical reading; original ASR is retained.', 'info')
         elif safety.get('status') == 'recovered':
             add(row, 'source_recovered', 'Acoustic source verification recovered or corrected this entry; original ASR is retained.', 'info')
+            if safety.get("reason") == "local_word_evidence" and row.get("refinement", {}).get("part", 1) == 1:
+                from .source_review import OPENING_SOUND
+                from .source_checks import reading
+                opening = OPENING_SOUND.match(safety.get("original_text", ""))
+                # A clipped ending (あっ vs あ) still represents the opening sound.
+                prefix = reading(opening[1].rstrip("っー")) if opening else ""
+                if prefix and row["id"] not in restored_openings and not reading(row["text"]).startswith(prefix):
+                    add(row, "opening_sound_missing",
+                        f"Initial ASR began with 「{opening[1]}」. Check the audio around the start of this line.")
         elif safety.get('status') == 'unresolved':
             add(row, 'source_verification_uncertain', 'Contextual spelling or audio checks did not provide sufficient agreement; inspect the retained source.')
         if safety.get('remaining_hints'):

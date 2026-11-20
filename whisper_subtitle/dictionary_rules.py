@@ -149,7 +149,8 @@ class RuleBook:
         entries = self._reviewed_lines(cache)
         reviewed = {(e["id"], e["asr"]): e for e in entries if "asr" in e}
         gaps = [dict(id=e["id"], start=e["start"], end=e["end"], text=e["source"],
-                     zh=e["zh"], reviewed_gap=True) for e in entries if e.get("kind") == "gap"]
+                     zh=e["zh"], reviewed_gap=True, **({"opening_for": e["opening_for"]} if "opening_for" in e else {}))
+                for e in entries if e.get("kind") == "gap"]
         if gaps:
             cache["reviewed_gaps"] = gaps
         else:
@@ -163,10 +164,22 @@ class RuleBook:
                     working = rule["target"] if rule["match"] == "exact" else working.replace(rule["source"], rule["target"])
                     hits["pre"].append(rule["id"])
             entry = reviewed.get((row.get("id"), working)) if not hits["pre"] else None
-            if entry:
+            if entry and "match_span" in entry and any(
+                abs(row[key] - expected) > 0.01
+                for key, expected in zip(("start", "end"), entry["match_span"], strict=True)
+            ):
+                entry = None
+            reviewed_span = entry.get("speech_span") if entry else None
+            if entry and entry.get("kind") == "timing":
+                entry = None
+            omit = entry and entry.get("kind") in {"duplicate", "unsupported"}
+            if entry and not omit:
                 working = entry["source"]
             fragment = None
-            if partial_speech and cache["language"] == "ja" and not entry and not hits["pre"]:
+            if omit:
+                fragment = {"mode": "omit", "source": "", "reason": entry["reason"],
+                            "reviewed_omission": entry["kind"], "evidence": []}
+            elif partial_speech and cache["language"] == "ja" and not entry and not hits["pre"]:
                 from .translation_evidence import assess_translation
                 fragment = assess_translation(row, cache["segments"])
             if fragment:
@@ -181,7 +194,7 @@ class RuleBook:
             inputs = {"source": working, "terms": terms}
             if fragment:
                 inputs["uncertainty_mode"] = fragment["mode"]
-            if entry:
+            if entry and not omit:
                 inputs["reviewed_zh"] = entry["zh"]
             signature = _signature(inputs)
             previous = row.get("rule_input_signature")
@@ -193,18 +206,16 @@ class RuleBook:
             row.update(translation_text=working, glossary_terms=terms, rule_input_signature=signature, rule_matches=hits)
             row.pop("review_uncertainty", None)
             row.pop("reviewed_speech_span", None)
-            if entry:
+            if reviewed_span is not None:
+                if not (isinstance(reviewed_span, list) and len(reviewed_span) == 2
+                        and all(type(value) in (int, float) for value in reviewed_span)
+                        and 0 <= reviewed_span[0] < reviewed_span[1] < float("inf")):
+                    raise DictionaryError(f"Invalid reviewed speech span for entry {row['id']}.")
+                if row["start"] <= reviewed_span[0] and reviewed_span[1] <= row["end"]:
+                    row["reviewed_speech_span"] = reviewed_span
+            if entry and not omit:
                 if entry.get("uncertainty"):
                     row["review_uncertainty"] = entry["uncertainty"]
-                span = entry.get("speech_span")
-                if span is not None:
-                    if not (isinstance(span, list) and len(span) == 2
-                            and all(type(value) in (int, float) for value in span)
-                            and 0 <= span[0] < span[1] < float("inf")):
-                        raise DictionaryError(f"Invalid reviewed speech span for entry {entry['id']}.")
-                    # A changed segment boundary can put an old listening annotation outside the line.
-                    if row["start"] <= span[0] and span[1] <= row["end"]:
-                        row["reviewed_speech_span"] = span
                 self.store(row, entry["zh"], cache["language"])
                 row.pop("model_zh", None)
                 row["human_reviewed"] = True

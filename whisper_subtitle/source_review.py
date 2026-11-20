@@ -7,6 +7,7 @@ import re
 from .source_checks import artifact, implausible_duplicate, key, reading, word_confidence
 
 VERSION = 5
+OPENING_SOUND = re.compile(r'^([あぁえぇんうぅはふへほっー]+)[?？!！…。、,\s]+')
 WORD_FINAL_NASAL_HINT = ('精神', '精子')
 SERVICE_NEAR_SOUND_HINT = ('魔女', 'マゾ')
 QUIET_PHRASE_HINTS = {
@@ -165,7 +166,7 @@ def _local_word_replacement(row: dict, passes: list[dict]) -> dict | None:
     from .alignment_review import overlapping_words
     from .word_boundaries import tokenizer
     old = reading(row['text'])
-    opening_sound = re.match(r'^([あぁえぇんうぅはふへほっー]+)[?？!！…。、,\s]+', row['text'])
+    opening_sound = OPENING_SOUND.match(row['text'])
     candidates = [(p['model'], focused(p['items'], row, p['left'])) for p in passes]
     for (model_a, a), (model_b, b) in combinations(candidates, 2):
         if not a or not b or not model_a or not model_b or model_a == model_b:
