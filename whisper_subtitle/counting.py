@@ -58,7 +58,7 @@ def apply_translations(cache: dict, book) -> int:
     spans = sessions(cache['segments'])
     changed = 0
     for row in cache['segments']:
-        if row.get('audio_review', {}).get('status') == 'omitted':
+        if row.get('translation_fragment') or row.get('audio_review', {}).get('status') == 'omitted':
             continue
         text = source_text(row)
         value = number(text, counting=in_session(row, spans))

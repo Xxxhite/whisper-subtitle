@@ -269,6 +269,8 @@ def relationship_guidance(lines: list[str], source_context: str = "") -> str:
     """Reinforce only grammar explicitly present in the current source."""
     source = '\n'.join(lines)
     notes = []
+    if '<together_sense/>' in source_context:
+        notes.append('先前明确说过一緒にいる。本句的一緒指相伴，不补出时长或对象。')
     if '<partial_asr/>' in source_context:
         notes.append('只翻译本句能听清的短语。保留省略的成分和未完的语气，不补写缺失的名词、主语或后续动作。')
         if source.startswith(('に', 'を', 'が')):

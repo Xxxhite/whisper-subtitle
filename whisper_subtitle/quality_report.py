@@ -25,12 +25,29 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
         if issue:
             add(row, 'source_' + issue, 'Malformed or nonlexical source text requires audio confirmation; excluded from final subtitles.', 'info')
         safety = row.get('source_review', {})
+        if row.get("review_uncertainty"):
+            add(row, "partially_reviewed_speech", row["review_uncertainty"])
+        elif row.get('human_reviewed'):
+            add(row, 'human_reviewed', 'Source wording and Chinese subtitle verified by human review.', 'info')
+        if row.get("reviewed_speech_span"):
+            start, end = row["reviewed_speech_span"]
+            add(row, "reviewed_speech_span", f"Reviewed speech interval: {start:.2f} to {end:.2f} seconds.", "info")
         fragment = row.get('translation_fragment')
         if fragment:
-            candidates = ', '.join(f"{e['model']}: {e['noun']}" for e in fragment['evidence'])
-            add(row, 'partially_translated_speech',
-                f"Only the agreed phrase at {fragment['start']:.2f}–{fragment['end']:.2f}s was translated. "
-                f"Disputed noun {fragment['noun']}. Alternatives: {candidates}")
+            mode = fragment.get("mode", "partial")
+            evidence = " | ".join(f"{e['model']}: {e.get('text', e.get('noun', ''))}" for e in fragment["evidence"])
+            reason = fragment.get("reason") or f"Disputed noun: {fragment.get('noun', '')}."
+            disputed = []
+            if fragment.get("before"):
+                disputed.append(f"{row['start']:.2f} to {fragment['start']:.2f}s")
+            if fragment.get("after"):
+                disputed.append(f"{fragment['end']:.2f} to {row['end']:.2f}s")
+            location = ("Unclear: " + ", ".join(disputed)) if disputed else f"Interval {row['start']:.2f} to {row['end']:.2f}s"
+            add(row, {"partial": "partially_translated_speech", "unclear": "unintelligible_speech",
+                      "omit": "unconfirmed_voice"}[mode],
+                f"{reason} {location}. {evidence}")
+            if mode != "partial":
+                continue
         alignment=row.get('alignment_review',{})
         if alignment.get('status')=='recovered':
             add(row,'word_alignment_repaired','Two local models confirmed a weak boundary or collapsed tail correction; raw ASR is retained.','info')
@@ -159,10 +176,30 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, "emoji_in_translation", "Emoji remains in the translation.")
         if len(target) > max(60, len(source_text(row)) * 4):
             add(row, "possible_expansion", "Translation is unusually long for its source.")
+    short = cache.get("short_speech", {})
+    if short.get("complete") and short.get("distinct_models"):
+        passes = short.get("passes", {})
+        for index, window in enumerate(short.get("candidates", [])):
+            if window.get("kind") != "gap" or not window.get("speech"):
+                continue
+            start, end = window["speech"]
+            if any(s["start"] < end and start < s["end"] for s in exported):
+                continue
+            evidence = []
+            for record in passes.values():
+                results = record.get("results", [])
+                if index < len(results):
+                    words = " / ".join(item["text"] for item in results[index]) or "(no words)"
+                    evidence.append(f"{record.get('model', '?')}: {words}")
+            if len(evidence) >= 2:
+                gap = {"id": f"gap-{index}", "start": start, "end": end, "text": ""}
+                add(gap, "unconfirmed_speech_gap", "Uncovered acoustic candidate; " + " | ".join(evidence))
     for previous, row in zip(exported, exported[1:]):
         if previous["end"] > row["start"]:
             add(row, "overlapping_timing", "Export overlaps the preceding subtitle.")
     for row in exported:
+        if row.get("reviewed_gap"):
+            add(row, "human_reviewed_gap", "Human listening confirmed an utterance in an uncovered interval.", "info")
         if row['end'] - row['start'] > 15:
             add(row, 'long_subtitle', 'Subtitle lasts more than 15 seconds; reliable word boundaries may be unavailable.')
     return result

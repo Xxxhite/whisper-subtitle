@@ -55,7 +55,9 @@ def spelling_hints(row: dict, rows: list[dict]) -> list[tuple[str, str]]:
     hints = vocabulary_hints(row, rows, TERMS)
     text = row['text']
     # A repeated near-sound is plausible in quiet dialogue only when a nearby line establishes the word.
-    if (re.fullmatch(r'(?:隙間[、。…\s]*|ね[えぇー][、。…\s]*){2,6}', text)
+    repeated_line = re.fullmatch(r'(?:隙間[、。…\s]*|ね[えぇー][、。…\s]*){2,6}', text)
+    repeated_tail = re.search(r'(?:隙間[、。…\s]+){2,6}$', text)
+    if ((repeated_line or repeated_tail)
             and '隙間' in text and any(r is not row and row['start'] - 75 <= r['end'] <= row['end'] + 25
                                       and '好き' in r['text'] for r in rows)):
         hints = [('隙間', '好き'), *hints]

@@ -627,7 +627,7 @@ def translate_with_sakura(cache: dict, cache_path: Path, config: dict, converter
                     continue
                 first_pending = offset + batch.index(pending[0])
                 context = segments[max(0, first_pending - config["translation"]["context_lines"]):first_pending]
-                history = [s["zh"] for s in context if s.get("zh") and not s.get("translation_fragment")]
+                history = [s["zh"] for s in context if s.get("zh") and not s.get("translation_fragment") and not s.get("review_uncertainty")]
                 if pending[0].get("translation_fragment"):
                     history = []
                 for attempt in range(config["translation"]["max_retries"] + 1):
@@ -715,13 +715,14 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
         if not retranslate and cache.get("translation_signature") in accepted:
             rejected = []
             for index, segment in enumerate(segments):
-                if not segment.get("zh"):
+                if not segment.get("zh") or segment.get("human_reviewed") or segment.get("translation_fragment", {}).get("mode") == "unclear":
                     continue
                 history = [s.get("model_zh", s.get("zh", "")) for s in segments[max(0, index - options["context_lines"]):index]
-                           if not s.get("translation_fragment")]
+                           if not s.get("translation_fragment") and not s.get("review_uncertainty")]
                 context = context_for(segment, segments)
                 if any(is_invalid_translation(text, source_text(segment), history=history, source_context=context)
-                       for text in (segment.get("model_zh", segment["zh"]), segment["zh"])):
+                       for text in ([segment.get("model_zh", segment["zh"])] if segment.get("translation_fragment")
+                                    else (segment.get("model_zh", segment["zh"]), segment["zh"]))):
                     rejected.append(segment["id"])
             if rejected or cache.get("translation_signature") != fingerprint(signature_data):
                 # Save an exact copy before repairing a completed or partial legacy cache.
@@ -745,14 +746,15 @@ def translate(cache: dict, cache_path: Path, config: dict, retranslate: bool) ->
         save_json(cache_path, cache)
     try:
         book = RuleBook.load(resolve_setting(config["dictionary_file"]), cleanup=config["format_cleanup"])
-        refreshed = book.prepare(cache, partial_speech=options["backend"] == "sakura")
+        refreshed = book.prepare(cache, partial_speech=options["backend"] in {"sakura", "api"})
     except DictionaryError as exc:
         raise AppError(str(exc)) from exc
     config["_rulebook"] = book
+    segments = eligible_segments(cache)
     if options['backend'] == 'api':
         from .source_checks import artifact
         from .translation_checks import meaning_errors, context_for
-        rejected = [s for s in segments if s.get('zh') and
+        rejected = [s for s in segments if s.get('zh') and not s.get('human_reviewed') and s.get('translation_fragment', {}).get('mode') != 'unclear' and
                     (artifact(s['zh']) or meaning_errors(source_text(s), s['zh'], context_for(s, segments)))]
         if rejected:
             backup = cache_path.with_name('task.before-translation-review-v1.json')
@@ -805,8 +807,15 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
         raise AppError(f"Set translation.api_key or {options['api_key_env']}, or enter a key in an interactive terminal. The transcript has been cached.")
     context_lines = options["context_lines"]
     progress.start()
-    for offset in range(0, len(segments), options["batch_size"]):
+    cursor = 0
+    while cursor < len(segments):
+        offset = cursor
         batch = segments[offset:offset + options["batch_size"]]
+        for index, segment in enumerate(batch):
+            if segment.get("translation_fragment") and not segment.get("zh"):
+                batch = batch[:index] if index else batch[:1]
+                break
+        cursor += len(batch)
         for segment in batch:
             if segment.get("zh"):
                 print_sentence(segment, "zh", config.get("quiet", False))
@@ -816,10 +825,14 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
             pending = [segment for segment in batch if not segment.get("zh")]
             payload = {
                 "source_language": cache["language"],
-                "context_before": [{"text": source_text(s), "zh": s.get("zh", "")} for s in segments[max(0, offset - context_lines):offset]],
+                "context_before": [{"text": source_text(s), "zh": s.get("zh", "")} for s in segments[max(0, offset - context_lines):offset] if not s.get("translation_fragment") and not s.get("review_uncertainty")],
                 "subtitles": [{"id": s["id"], "text": source_text(s)} for s in pending],
-                "context_after": [{"text": source_text(s)} for s in segments[offset + len(batch):offset + len(batch) + context_lines]],
+                "context_after": [{"text": source_text(s)} for s in segments[offset + len(batch):offset + len(batch) + context_lines] if not s.get("translation_fragment") and not s.get("review_uncertainty")],
             }
+            partial = bool(pending[0].get("translation_fragment"))
+            if partial:
+                payload["context_before"] = []
+                payload["context_after"] = []
             glossary = batch_glossary(pending)
             from .translation_checks import (alternating_tongue_motion, explicit_question, favorite_ear_action, physical_fit,
                                              progressive_action_clause, relaxed_expression)
@@ -832,6 +845,11 @@ def translate_segments(cache: dict, cache_path: Path, config: dict, converter, a
                 (favorite_ear_action, 'Attach the preference to the ear-related action as a whole.'),
                 (progressive_action_clause, 'Translate the current progressive action without borrowing connective meaning from neighboring entries.')
             ) if any(check(line) for line in source_lines))
+            if partial:
+                focused_instructions += "\nTranslate only the supplied audible fragment. Preserve omitted subjects and objects."
+                from .translation_checks import context_for
+                if '<together_sense/>' in context_for(pending[0], segments):
+                    focused_instructions += " Earlier usage establishes companionship, not similarity."
             messages = [
                 {"role": "system", "content": api_prompt + "\n" + options["instructions"] + focused_instructions + ("\n\nMatched glossary:\n" + glossary if glossary else "")},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -1034,8 +1052,10 @@ def run(args: argparse.Namespace) -> Path:
                 raise
         from .subtitle_processing import prepare_subtitles
         final_segments = prepare_subtitles(cache["segments"], merge_sounds=config["merge_repeated_sounds"],
-                                          minimum=config["minimum_subtitle_seconds"])
-        if not final_segments:
+                                          minimum=config["minimum_subtitle_seconds"],
+                                          reviewed_gaps=cache.get("reviewed_gaps", ()))
+        if not final_segments and not any(
+                s.get("translation_fragment", {}).get("mode") == "omit" for s in cache["segments"]):
             raise AppError("No reliable subtitle entries remain after cleanup. The original transcript is cached.")
         adjusted = len(cache["segments"]) - len(final_segments)
         if adjusted:

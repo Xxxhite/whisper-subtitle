@@ -169,3 +169,9 @@ This also writes `sample.quality.csv` to the selected output directory. The UTF-
 Checks include missing glossary terms, possible Japanese residue, unexpected English, punctuation pairing, possible repetition and expansion, unresolved local audio checks, and exported timing overlap. Notes record applied rules, formatting cleanup, and filtered recognition artifacts. Protected glossary targets are excluded from the Japanese-residue check.
 
 Warnings are review candidates, not automatic edits. Report IDs follow the transcript; final subtitle entries may combine several transcript entries. Without `--report`, the output selection stays unchanged.
+
+## Uncertain Japanese speech
+
+Before translation, the program compares available local recognition passes and their word times. An independently supported phrase can be translated on its own, with `〔听不清〕` at the missing end or ends. When two timed hypotheses confirm speech but disagree on a meaning-changing detail such as negation, the line can contain only `〔听不清〕`. Unconfirmed voice intervals can instead be omitted from subtitles and listed in the quality CSV. A single low score or an omitted Japanese subject does not by itself trigger a marker.
+
+Run with `--report` to inspect the source, translation input, uncertain interval and model readings. Look for `partially_translated_speech`, `unintelligible_speech`, `unconfirmed_voice`, and `unconfirmed_speech_gap`. The same decisions apply to Sakura and API translation. Per-recording human reviews take priority and a rerun reuses unaffected translations.

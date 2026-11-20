@@ -16,7 +16,8 @@ def eligible_segments(cache: dict) -> list[dict]:
     from .source_checks import artifact
     return [row for row in cache["segments"] if not is_pure_emoji(row["text"])
             and not artifact(row['text'])
-            and row.get("audio_review", {}).get("status") != "omitted"]
+            and row.get("audio_review", {}).get("status") != "omitted"
+            and row.get("translation_fragment", {}).get("mode") != "omit"]
 
 
 def repeated_kana(text: str) -> tuple[str, str, int] | None:
@@ -35,7 +36,7 @@ def kana_unit_key(text: str) -> str:
     return ''.join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in text).replace('ー', '')
 
 
-def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimum: float = .8) -> list[dict]:
+def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimum: float = .8, reviewed_gaps: tuple | list = ()) -> list[dict]:
     def ticks(seconds):
         return max(0, int(seconds * 100 + .5))
 
@@ -43,7 +44,18 @@ def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimu
     from .source_checks import artifact
     rows = [dict(row) for row in segments if not artifact(row['text']) and (not row.get('zh') or not artifact(row['zh']))
             and not contains_emoji(row["text"]) and not contains_emoji(row.get("zh", ""))
-            and row.get("audio_review", {}).get("status") != "omitted"]
+            and row.get("audio_review", {}).get("status") != "omitted"
+            and row.get("translation_fragment", {}).get("mode") != "omit"]
+    for row in rows:
+        if row.get("reviewed_speech_span"):
+            row["start"], row["end"] = row["reviewed_speech_span"]
+    for gap in reviewed_gaps:
+        if 0 <= gap["start"] < gap["end"] and not any(
+                row["start"] < gap["end"] and gap["start"] < row["end"] for row in rows):
+            rows.append(dict(gap))
+    if reviewed_gaps:
+        rows.sort(key=lambda row: row["start"])
+        limit = max(limit, max((ticks(row["end"]) for row in rows), default=0))
     if merge_sounds:
         rows = merge_repeated_sounds(rows)
     # Work on centisecond ticks, matching LRC precision and avoiding float carries.
@@ -57,14 +69,15 @@ def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimu
         while end - start < floor and index + 1 < len(rows):
             next_row = rows[index + 1]
             next_start = ticks(next_row["start"])
-            if next_start >= start + floor:
+            if row.get("translation_fragment") or next_row.get("translation_fragment") or next_start >= start + floor:
                 break
             row["text"] += " " + next_row["text"]
             row["zh"] = row.get("zh", "") + " " + next_row.get("zh", "")
             end = max(end, ticks(next_row["end"]))
             index += 1
         next_start = ticks(rows[index + 1]["start"]) if index + 1 < len(rows) else None
-        end = max(end, start + floor)
+        if not row.get("translation_fragment"):
+            end = max(end, start + floor)
         if next_start is not None:
             end = min(end, next_start)
         row["start"], row["end"] = start / 100, end / 100
@@ -73,7 +86,9 @@ def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimu
     if result and ticks(result[-1]["end"]) > limit:
         last = result[-1]
         earlier_start = max(0, limit - floor)
-        if len(result) == 1 or ticks(result[-2]["end"]) <= earlier_start:
+        if len(result) > 1 and result[-2].get("translation_fragment"):
+            last["end"] = limit / 100
+        elif len(result) == 1 or ticks(result[-2]["end"]) <= earlier_start:
             last["start"], last["end"] = earlier_start / 100, limit / 100
         else:
             previous = result[-2]
@@ -112,7 +127,7 @@ def merge_repeated_sounds(segments: list[dict], *, max_gap: float = 1.0, max_spa
     merged = []
     previous_key = None
     for segment in segments:
-        key = sound_key(segment["text"])
+        key = None if segment.get("translation_fragment") else sound_key(segment["text"])
         if (merged and key is not None and key == previous_key
                 and 0 <= segment["start"] - merged[-1]["end"] <= max_gap
                 and segment["end"] - merged[-1]["start"] <= max_span):

@@ -132,7 +132,28 @@ class RuleBook:
                     covered[start:end] = [True] * (end - start)
         return selected
 
+    def _reviewed_lines(self, cache: dict) -> list[dict]:
+        digest = cache.get("file_hash", "")
+        if cache.get("language") != "ja" or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return []
+        path = Path(__file__).with_name("reviewed_lines") / (digest + ".json")
+        if not path.exists():
+            return []
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            return entries
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise DictionaryError(f"Could not load reviewed subtitles {path}: {exc}") from exc
+
     def prepare(self, cache: dict, *, partial_speech: bool = False) -> int:
+        entries = self._reviewed_lines(cache)
+        reviewed = {(e["id"], e["asr"]): e for e in entries if "asr" in e}
+        gaps = [dict(id=e["id"], start=e["start"], end=e["end"], text=e["source"],
+                     zh=e["zh"], reviewed_gap=True) for e in entries if e.get("kind") == "gap"]
+        if gaps:
+            cache["reviewed_gaps"] = gaps
+        else:
+            cache.pop("reviewed_gaps", None)
         refreshed = 0
         for row in cache["segments"]:
             working = row["text"]
@@ -141,20 +162,28 @@ class RuleBook:
                 if _matches(working, rule["source"], rule["match"]):
                     working = rule["target"] if rule["match"] == "exact" else working.replace(rule["source"], rule["target"])
                     hits["pre"].append(rule["id"])
-            terms = []
-            for rule in self.match_glossary(working, cache["language"]):
-                terms.append({key: rule.get(key, "") for key in ("source", "target", "note")})
-                hits["glossary"].append(rule["id"])
+            entry = reviewed.get((row.get("id"), working)) if not hits["pre"] else None
+            if entry:
+                working = entry["source"]
             fragment = None
-            if partial_speech and cache["language"] == "ja" and not hits["pre"] and not terms:
-                from .translation_evidence import supported_fragment
-                fragment = supported_fragment(row, cache["segments"])
+            if partial_speech and cache["language"] == "ja" and not entry and not hits["pre"]:
+                from .translation_evidence import assess_translation
+                fragment = assess_translation(row, cache["segments"])
             if fragment:
                 working = fragment["source"]
                 row["translation_fragment"] = fragment
             else:
                 row.pop("translation_fragment", None)
-            signature = _signature({"source": working, "terms": terms})
+            terms = []
+            for rule in self.match_glossary(working, cache["language"]) if working else ():
+                terms.append({key: rule.get(key, "") for key in ("source", "target", "note")})
+                hits["glossary"].append(rule["id"])
+            inputs = {"source": working, "terms": terms}
+            if fragment:
+                inputs["uncertainty_mode"] = fragment["mode"]
+            if entry:
+                inputs["reviewed_zh"] = entry["zh"]
+            signature = _signature(inputs)
             previous = row.get("rule_input_signature")
             changed = previous != signature if previous is not None else working != row["text"] or bool(terms)
             if changed:
@@ -162,7 +191,33 @@ class RuleBook:
                 row.pop("zh", None)
                 row.pop("model_zh", None)
             row.update(translation_text=working, glossary_terms=terms, rule_input_signature=signature, rule_matches=hits)
-            if row.get("zh"):
+            row.pop("review_uncertainty", None)
+            row.pop("reviewed_speech_span", None)
+            if entry:
+                if entry.get("uncertainty"):
+                    row["review_uncertainty"] = entry["uncertainty"]
+                span = entry.get("speech_span")
+                if span is not None:
+                    if not (isinstance(span, list) and len(span) == 2
+                            and all(type(value) in (int, float) for value in span)
+                            and 0 <= span[0] < span[1] < float("inf")):
+                        raise DictionaryError(f"Invalid reviewed speech span for entry {entry['id']}.")
+                    # A changed segment boundary can put an old listening annotation outside the line.
+                    if row["start"] <= span[0] and span[1] <= row["end"]:
+                        row["reviewed_speech_span"] = span
+                self.store(row, entry["zh"], cache["language"])
+                row.pop("model_zh", None)
+                row["human_reviewed"] = True
+            else:
+                row.pop("human_reviewed", None)
+            if fragment and fragment["mode"] in {"unclear", "omit"}:
+                row.pop("model_zh", None)
+                row.pop("needs_audio_review", None)
+                if fragment["mode"] == "unclear":
+                    row["zh"] = "〔听不清〕"
+                else:
+                    row.pop("zh", None)
+            elif not entry and row.get("zh"):
                 self.store(row, row.get("model_zh", row["zh"]), cache["language"])
         return refreshed
 
@@ -182,7 +237,8 @@ class RuleBook:
                 hits["post"].append(rule["id"])
         cleaned = normalize_translation(result, original) if self.cleanup else result
         row["format_normalized"] = cleaned != result
-        row["zh"] = cleaned + "〔部分听不清〕" if row.get("translation_fragment") else cleaned
+        fragment = row.get("translation_fragment", {})
+        row["zh"] = ("〔听不清〕" if fragment.get("before") else "") + cleaned + ("〔听不清〕" if fragment.get("after") else "")
 
 
 def batch_glossary(rows: list[dict]) -> str:

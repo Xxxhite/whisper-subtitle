@@ -36,6 +36,10 @@ def normalize_contextual_actions(source: str, target: str, context: str) -> str:
         target = re.sub(r'^(?:只是|仅仅是|仅是|只)(.+?)(?:而已|罢了)[。.…\s]*$', r'光是\1就……', target)
     if '<partial_asr/>' in context and re.match(r'に(?:注|そそ)ぐ', source):
         target = re.sub(r'(?:倾[泻泄]|喷涌|奔涌)而出', '往……里倒', target)
+    if '<partial_asr/>' in context and re.fullmatch(r'一緒(?:だよ|です|だね)?[。…]*', source):
+        target = re.sub(r'^(?:我[们倆俩]|咱[们倆俩]|你和我|我和你)(?=在一起)', '', target)
+    if '<together_sense/>' in context:
+        target = re.sub(r'^(?:是)?(?:一[样樣]|相同)的?(?=[呀哦啊呢。！!…]*$)', '在一起', target)
     if omitted_provider(source, context) and re.search(r'(?:優|やさ)しく言ってもらえると思った', source):
         target = re.sub(r'(?:我)?((?:还)?以为)[他她]会(?:很|更)?温柔地?(?:对我|跟我|和我)(?:说话|说)',
                         r'\1能听到温柔的话', target)
@@ -125,6 +129,9 @@ def favorite_ear_action(source: str) -> bool:
 
 def normalize_participants(source: str, target: str) -> str:
     """Keep an omitted receiver omitted instead of inventing a participant."""
+    if re.fullmatch(r'(?:大)?好き(?:だよ|です|だね)?[。！…]*', source):
+        target = re.sub(r'^(?:我|俺|人家)?((?:真的|很|好|最|非常|特别|真)?喜欢)(?:你|您|我)(?=[呀哦啊呢啦。！!…]*$)', r'\1', target)
+        target = re.sub(r'^(?:我|俺|人家)(?=(?:真的|很|好|最|非常|特别|真)?喜欢[呀哦啊呢啦。！!…]*$)', '', target)
     if (re.search(r'耳.{0,14}(?:なぞられ|舐められ|なめられ|触れられ)',source)
             and not re.search(r'私|わたし|僕|ぼく|俺|彼|彼女|君|あなた|お客様|お兄さん',source)):
         target=re.sub(r'([让令使])[我他她](?:的)?(?=身子|身体|浑身)',r'\1',target)
@@ -141,9 +148,20 @@ def uncertain_source(row: dict) -> bool:
 
 def context_for(row: dict, rows: list[dict]) -> str:
     if row.get('translation_fragment'):
+        # Use explicit previous uses of the same word only to disambiguate its meaning.
+        # Do not send neighboring dialogue or supply the missing part of the sentence.
+        if re.fullmatch(r'一緒(?:だよ|だね|です)?[。…]*', row.get('translation_text', '')):
+            for previous in reversed(rows):
+                if (0 <= row['start'] - previous['end'] <= 240 and previous.get('zh')
+                        and not previous.get('translation_fragment') and not previous.get('review_uncertainty')
+                        and previous.get('audio_review', {}).get('status') != 'omitted'
+                        and '一緒' in previous['text']):
+                    if re.search(r'一緒に(?:い(?:て|る)|居(?:て|る)|過ご)', previous['text']):
+                        return '<partial_asr/><together_sense/>'
+                    break
         return '<partial_asr/>'
     from .audio_review import preceding_context
-    rows = [r for r in rows if not r.get('translation_fragment')]
+    rows = [r for r in rows if not r.get('translation_fragment') and not r.get('review_uncertainty')]
     before=preceding_context(row,rows)
     following=[r['text'] for r in rows if row['end']<=r['start']<=row['end']+10 and r['id']!=row['id']
                and r.get('audio_review',{}).get('status')!='omitted'][:1]
@@ -169,6 +187,8 @@ def meaning_errors(source: str, target: str, context: str = '') -> list[str]:
         if (source.startswith(('に', 'を', 'が')) and not re.search(r'私|君|僕|俺|あなた|彼|さん|先生|相手', source)
                 and re.search(r'(?:于|给|对|向|往|朝|为|让|使|跟|和|把|被)[你您我他她]|[你您我他她]的|^[你您我他她]', target)):
             errors.append('invented_participant_in_partial_speech')
+        if '<together_sense/>' in context and re.search(r'一样|一樣|相同', target):
+            errors.append('companionship_translated_as_similarity')
         if source.endswith('だけで') and re.search(r'(?:而已|罢了)[。.…\s]*$', target):
             errors.append('unfinished_condition_translated_as_complete')
         if re.match(r'に(?:注|そそ)ぐ', source) and re.search(r'(?:倾[泻泄]|喷涌|奔涌)而出', target):
