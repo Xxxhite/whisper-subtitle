@@ -213,7 +213,7 @@ def findings(cache: dict, exported: list[dict]) -> list[dict]:
             add(row, "overlapping_timing", "Export overlaps the preceding subtitle.")
     for row in exported:
         if row.get("reviewed_gap"):
-            add(row, "human_reviewed_gap", "Human listening confirmed an utterance in an uncovered interval.", "info")
+            add(row, "human_reviewed_gap", "A reviewed subtitle restores an utterance in an uncovered interval.", "info")
         if row['end'] - row['start'] > 15:
             add(row, 'long_subtitle', 'Subtitle lasts more than 15 seconds; reliable word boundaries may be unavailable.')
     return result

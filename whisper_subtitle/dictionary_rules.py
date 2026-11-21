@@ -155,6 +155,8 @@ class RuleBook:
             cache["reviewed_gaps"] = gaps
         else:
             cache.pop("reviewed_gaps", None)
+        count_parents = {row["count_review"]["split_from"] for row in cache["segments"]
+                         if "split_from" in row.get("count_review", {})}
         refreshed = 0
         for row in cache["segments"]:
             working = row["text"]
@@ -164,8 +166,17 @@ class RuleBook:
                     working = rule["target"] if rule["match"] == "exact" else working.replace(rule["source"], rule["target"])
                     hits["pre"].append(rule["id"])
             entry = reviewed.get((row.get("id"), working)) if not hits["pre"] else None
+            matched = row
+            if not entry and not hits["pre"] and row.get("id") in count_parents and row.get("original_asr"):
+                original = row["original_asr"]
+                prior = reviewed.get((row["id"], original["text"]))
+                # A split count can shorten the source while retaining the reviewed dialogue.
+                if prior and "match_span" in prior and "speech_span" in prior:
+                    left, right = prior["speech_span"]
+                    if row["start"] <= left < right <= row["end"]:
+                        entry, matched = prior, original
             if entry and "match_span" in entry and any(
-                abs(row[key] - expected) > 0.01
+                abs(matched[key] - expected) > 0.01
                 for key, expected in zip(("start", "end"), entry["match_span"], strict=True)
             ):
                 entry = None

@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import unicodedata
 
-VERSION = 4
+VERSION = 5
 STEREO_PADDING = .2
 
 
@@ -108,7 +108,9 @@ def plan_stereo_gaps(source: Path, segments: list[dict], planned: list[dict]) ->
             for region in speech:
                 start = left + region['start'] / 16000
                 end = left + region['end'] / 16000
-                if .32 <= end - start <= 2.5 and not any(min(end, b) - max(start, a) >= .12 for a, b in covered):
+                # VAD often marks only the loudest part of a quiet phrase.
+                # The padded window still requires independent decoder agreement.
+                if .24 <= end - start <= 2.5 and not any(min(end, b) - max(start, a) >= .12 for a, b in covered):
                     regions.append((start, end, channel))
         distinct = []
         for start, end, channel in sorted(regions, key=lambda r: (r[0]-r[1], r[0])):
@@ -368,14 +370,21 @@ def review_short_speech(source: Path, cache: dict, cache_path: Path, config: dic
                                       min_speech_duration_ms=100, min_silence_duration_ms=100, speech_pad_ms=0)
         previous = state
         candidates = plan_candidates(cache['segments'], speech)
-        stereo_candidates = plan_stereo_gaps(source, cache['segments'], candidates) if stereo else []
+        extend_stereo = previous.get('complete') and previous.get('version') == 4
+        covered = candidates + previous['candidates'] if extend_stereo else candidates
+        stereo_candidates = plan_stereo_gaps(source, cache['segments'], covered) if stereo else []
         if previous.get('complete') and previous.get('version') in {1, 2, 3}:
             candidates = [w for w in candidates if (previous['version'] < 3 and w.get('long_gap'))
                           or (previous['version'] == 1 and w['kind'] == 'internal')]
-        candidates.extend(stereo_candidates)
-        state = {'version': VERSION, 'candidates': candidates,
-                 'passes': {}, 'applied': 0, 'added_ids': previous.get('added_ids', []),
-                 'changed_ids': previous.get('changed_ids', []), 'complete': False}
+        if extend_stereo:
+            # Preserve completed results and their candidate indexes in existing rows.
+            new_windows = [w for w in stereo_candidates if w['speech'][1] - w['speech'][0] < .32]
+            state = {**previous, 'version': VERSION, 'complete': False,
+                     'candidates': previous['candidates'] + new_windows}
+        else:
+            state = {'version': VERSION, 'candidates': candidates + stereo_candidates,
+                     'passes': {}, 'applied': 0, 'added_ids': previous.get('added_ids', []),
+                     'changed_ids': previous.get('changed_ids', []), 'complete': False}
         backup_version = 2 if previous.get('version') == 1 else VERSION
         backup = cache_path.with_name(f'task.before-short-review-v{backup_version}.json' if previous else 'task.before-short-review.json')
         if not backup.exists():

@@ -50,9 +50,19 @@ def prepare_subtitles(segments: list[dict], *, merge_sounds: bool = True, minimu
         if row.get("reviewed_speech_span"):
             row["start"], row["end"] = row["reviewed_speech_span"]
     for gap in reviewed_gaps:
-        if 0 <= gap["start"] < gap["end"] and not any(
-                row["start"] < gap["end"] and gap["start"] < row["end"] for row in rows):
-            rows.append(dict(gap))
+        if not 0 <= gap["start"] < gap["end"]:
+            continue
+        overlaps = [row for row in rows if row["start"] < gap["end"] and gap["start"] < row["end"]]
+        # Prefer reviewed timing for the same recovered laugh or count.
+        if not all(
+                gap["start"] - .01 <= row["start"] < row["end"] <= gap["end"] + .01
+                and (("opening_for" in gap and row.get("short_review", {}).get("kind") == "clipped_laugh")
+                     or (row.get("count_review", {}).get("status") == "recovered" and row["text"] == gap["text"]))
+                for row in overlaps):
+            continue
+        for row in overlaps:
+            rows.remove(row)
+        rows.append(dict(gap))
     if reviewed_gaps:
         rows.sort(key=lambda row: row["start"])
         limit = max(limit, max((ticks(row["end"]) for row in rows), default=0))
